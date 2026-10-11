@@ -1,0 +1,460 @@
+[
+  {
+    "ecosystem": "python",
+    "name": "alembic",
+    "version": "1.20.0",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/alembic/7-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "annotated-doc",
+    "version": "0.0.5",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/annotated-doc/6-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "annotated-types",
+    "version": "0.8.0",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/annotated-types/5-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "anyio",
+    "version": "4.15.1",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/anyio/6-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "cffi",
+    "version": "2.1.1",
+    "license": "MIT-0",
+    "notices": [
+      "licenses/python/cffi/8-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "click",
+    "version": "8.5.0",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "licenses/python/click/5-LICENSE.txt.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "cryptography",
+    "version": "50.0.2",
+    "license": "Apache-2.0 OR BSD-3-Clause",
+    "notices": [
+      "licenses/python/cryptography/5-LICENSE.txt",
+      "licenses/python/cryptography/6-LICENSE.APACHE.txt",
+      "licenses/python/cryptography/7-LICENSE.BSD.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "defusedxml",
+    "version": "0.7.1",
+    "license": "PSFL",
+    "notices": [
+      "licenses/python/defusedxml/1-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "et-xmlfile",
+    "version": "2.0.0",
+    "license": "MIT",
+    "notices": []
+  },
+  {
+    "ecosystem": "python",
+    "name": "fastapi",
+    "version": "0.142.2",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/fastapi/7-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "fonttools",
+    "version": "4.66.1",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/fonttools/366-LICENSE.txt",
+      "licenses/python/fonttools/367-LICENSE.external.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "greenlet",
+    "version": "3.5.6",
+    "license": "MIT AND PSF-2.0",
+    "notices": [
+      "licenses/python/greenlet/6-LICENSE.txt",
+      "licenses/python/greenlet/7-LICENSE.PSF.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "h11",
+    "version": "0.16.0",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/h11/5-LICENSE.txt.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "idna",
+    "version": "3.20",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "licenses/python/idna/7-LICENSE.md.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "mako",
+    "version": "1.4.3",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/mako/7-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "markupsafe",
+    "version": "3.0.4",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "licenses/python/markupsafe/5-LICENSE.txt.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "numpy",
+    "version": "2.5.3",
+    "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+    "notices": [
+      "licenses/python/numpy/9-LICENSE.txt.txt",
+      "licenses/python/numpy/10-LICENSE.txt.txt",
+      "licenses/python/numpy/11-COPYING.txt",
+      "licenses/python/numpy/12-LICENSE.txt",
+      "licenses/python/numpy/13-dragon4_LICENSE.txt.txt",
+      "licenses/python/numpy/14-LICENSE.md.txt",
+      "licenses/python/numpy/15-LICENSE.txt",
+      "licenses/python/numpy/16-LICENSE.md.txt",
+      "licenses/python/numpy/17-LICENSE.txt.txt",
+      "licenses/python/numpy/18-LICENSE.txt",
+      "licenses/python/numpy/19-LICENSE.md.txt",
+      "licenses/python/numpy/20-LICENSE.md.txt",
+      "licenses/python/numpy/21-LICENSE.md.txt",
+      "licenses/python/numpy/22-LICENSE.md.txt",
+      "licenses/python/numpy/23-LICENSE.md.txt",
+      "licenses/python/numpy/24-LICENSE.md.txt",
+      "licenses/python/numpy/25-LICENSE.md.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "openpyxl",
+    "version": "3.1.5",
+    "license": "MIT",
+    "notices": []
+  },
+  {
+    "ecosystem": "python",
+    "name": "opentelemetry-api",
+    "version": "1.45.1",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/opentelemetry-api/48-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "pandas",
+    "version": "3.0.6",
+    "license": "BSD 3-Clause License\n\n Copyright (c) 2008-2011, AQR Capital Management, LLC, Lambda Foundry, Inc. and PyData Development Team\n All rights reserved.\n\n Copyright (c) 2011-2026, Open source contributors.\n\n Redistribution and use in source and binary forms, with or without\n modification, are permitted p",
+    "notices": [
+      "licenses/python/pandas/2-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "playwright",
+    "version": "1.63.0",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/playwright/7-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "psutil",
+    "version": "7.2.2",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "licenses/python/psutil/1-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "psycopg",
+    "version": "3.3.6",
+    "license": "LGPL-3.0-only",
+    "notices": [
+      "licenses/python/psycopg/5-LICENSE.txt.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "psycopg-binary",
+    "version": "3.3.6",
+    "license": "LGPL-3.0-only",
+    "notices": [
+      "licenses/python/psycopg-binary/6-LICENSE.txt.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "pycparser",
+    "version": "3.0",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "licenses/python/pycparser/5-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "pydantic",
+    "version": "2.13.5",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/pydantic/5-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "pydantic-core",
+    "version": "2.46.5",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/pydantic-core/5-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "pydantic-settings",
+    "version": "2.15.0",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/pydantic-settings/5-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "pyee",
+    "version": "13.0.1",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/pyee/5-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "python-dateutil",
+    "version": "2.9.0.post0",
+    "license": "Dual License",
+    "notices": [
+      "licenses/python/python-dateutil/20-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "python-dotenv",
+    "version": "1.2.4",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "licenses/python/python-dotenv/16-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "python-multipart",
+    "version": "0.0.32",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/python-multipart/9-LICENSE.txt.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "six",
+    "version": "1.17.0",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/six/1-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "sqlalchemy",
+    "version": "2.0.54",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/sqlalchemy/6-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "starlette",
+    "version": "1.7.0",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "licenses/python/starlette/5-LICENSE.md.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "typing-extensions",
+    "version": "4.16.0",
+    "license": "PSF-2.0",
+    "notices": [
+      "licenses/python/typing-extensions/5-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "typing-inspection",
+    "version": "0.4.4",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/typing-inspection/5-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "tzdata",
+    "version": "2026.5",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/tzdata/5-LICENSE.txt",
+      "licenses/python/tzdata/6-LICENSE_APACHE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "uvicorn",
+    "version": "0.54.0",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "licenses/python/uvicorn/7-LICENSE.md.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@tanstack/query-core",
+    "version": "5.104.1",
+    "license": "MIT",
+    "notices": [
+      "licenses/npm/@tanstack/query-core/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@tanstack/react-query",
+    "version": "5.104.1",
+    "license": "MIT",
+    "notices": [
+      "licenses/npm/@tanstack/react-query/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "cookie",
+    "version": "1.1.1",
+    "license": "MIT",
+    "notices": [
+      "licenses/npm/cookie/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "lucide-react",
+    "version": "0.468.0",
+    "license": "ISC",
+    "notices": [
+      "licenses/npm/lucide-react/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react",
+    "version": "19.3.0",
+    "license": "MIT",
+    "notices": [
+      "licenses/npm/react/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react-dom",
+    "version": "19.3.0",
+    "license": "MIT",
+    "notices": [
+      "licenses/npm/react-dom/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react-router",
+    "version": "7.18.4",
+    "license": "MIT",
+    "notices": [
+      "licenses/npm/react-router/LICENSE.md.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react-router-dom",
+    "version": "7.18.4",
+    "license": "MIT",
+    "notices": [
+      "licenses/npm/react-router-dom/LICENSE.md.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "scheduler",
+    "version": "0.28.0",
+    "license": "MIT",
+    "notices": [
+      "licenses/npm/scheduler/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "set-cookie-parser",
+    "version": "2.7.2",
+    "license": "MIT",
+    "notices": [
+      "licenses/npm/set-cookie-parser/LICENSE.txt"
+    ]
+  }
+]

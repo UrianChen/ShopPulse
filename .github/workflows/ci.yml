@@ -1,0 +1,73 @@
+name: ShopPulse checks
+on:
+  push:
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+          python-version: '3.12'
+      - run: python scripts/init_secrets.py
+      - run: docker compose -f compose.dev.yaml up -d --wait
+      - run: uv sync --frozen
+        working-directory: backend
+      - run: backend/.venv/bin/python scripts/check_versions.py
+      - run: python scripts/test_release.py && python scripts/check_secrets.py
+      - run: uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file ../.cache-audit-requirements.txt
+        working-directory: backend
+      - run: uvx pip-audit -r .cache-audit-requirements.txt --disable-pip --no-deps
+      - run: uv run playwright install --with-deps chromium
+        working-directory: backend
+      - run: uv run ruff check . && uv run ruff format --check .
+        working-directory: backend
+      - run: uv run alembic upgrade head && uv run alembic check && uv run pytest -q --cov=app.metrics --cov=app.ingestion.normalize --cov-branch --cov-report=json:coverage.json && uv run python ../scripts/check_coverage.py coverage.json
+        working-directory: backend
+      - run: docker compose -f compose.dev.yaml down
+        if: always()
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm test && npm run build && npm audit --audit-level=high
+        working-directory: frontend
+  compose-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: python scripts/init_secrets.py
+      - run: docker compose -f compose.yaml -f compose.mock.yaml config --quiet && docker compose -f compose.yaml -f compose.mock.yaml up -d --build
+      - name: Wait for web
+        run: |
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://localhost:8080/api/v1/health/ready; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - run: python scripts/smoke_test.py
+      - run: npm ci && npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:e2e
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_MODEL_BASE_URL: http://mock-provider:8099/v1
+      - run: python scripts/check_secrets.py --compose
+      - run: docker compose -f compose.yaml -f compose.mock.yaml down
+        if: always()

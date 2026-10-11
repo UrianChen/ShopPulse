@@ -1,0 +1,86 @@
+name: shoppulse
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  environment: &backend-env
+    APP_ENV: production
+    APP_PUBLIC_URL: ${COMPOSE_PUBLIC_URL:-http://localhost:8080}
+    DATABASE_HOST: db
+    DATABASE_PORT: 5432
+    DATABASE_NAME: shoppulse
+    DATABASE_USER: shoppulse
+    DATABASE_PASSWORD_FILE: /run/secrets/database_password
+    CREDENTIAL_MASTER_KEY_FILE: /run/secrets/credential_master_key
+    CREDENTIAL_KEY_VERSION: ${CREDENTIAL_KEY_VERSION:-1}
+    CREDENTIAL_OLD_KEYS: "{}"
+    MODEL_ALLOWED_ORIGINS: ${MODEL_ALLOWED_ORIGINS:-[]}
+    STORAGE_ROOT: /data/shoppulse
+  secrets: [database_password, credential_master_key]
+  volumes: ["app_data:/data/shoppulse"]
+  init: true
+  read_only: true
+  tmpfs: ["/tmp"]
+  depends_on:
+    db:
+      condition: service_healthy
+services:
+  db:
+    image: postgres:17.7-alpine
+    environment:
+      POSTGRES_DB: shoppulse
+      POSTGRES_USER: shoppulse
+      POSTGRES_PASSWORD_FILE: /run/secrets/database_password
+    secrets: [database_password]
+    volumes: ["db_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U shoppulse -d shoppulse"]
+      start_period: 120s
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+  api:
+    <<: *backend
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 10
+    restart: unless-stopped
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.jobs.worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 30s
+    restart: unless-stopped
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports: ["127.0.0.1:${COMPOSE_PORT:-8080}:8080"]
+    depends_on:
+      api:
+        condition: service_healthy
+    read_only: true
+    tmpfs: ["/tmp"]
+    restart: unless-stopped
+secrets:
+  database_password:
+    file: ./secrets/database_password
+  credential_master_key:
+    file: ./secrets/credential_master_key
+volumes:
+  db_data:
+  app_data:

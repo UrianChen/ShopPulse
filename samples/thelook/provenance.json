@@ -1,0 +1,53 @@
+{
+  "dataset": "Google TheLook eCommerce (synthetic)",
+  "mirror_commit": "bb74707d5ab31c35795e017d2dc7f98895efb0af",
+  "source_urls": {
+    "orders": "https://raw.githubusercontent.com/marcelFRO/ecommerce-analytics/bb74707d5ab31c35795e017d2dc7f98895efb0af/data/raw/orders.csv",
+    "order_items": "https://raw.githubusercontent.com/marcelFRO/ecommerce-analytics/bb74707d5ab31c35795e017d2dc7f98895efb0af/data/raw/order_items.csv",
+    "products": "https://raw.githubusercontent.com/marcelFRO/ecommerce-analytics/bb74707d5ab31c35795e017d2dc7f98895efb0af/data/raw/products.csv"
+  },
+  "source_sha256": {
+    "orders": "6b710889a08cfad310e7b5939618715fb238280659c4e210fc23d925ca86175b",
+    "order_items": "fe86c46cb0b947cbcedc8abc066c4458b0b577de8d72e116d965476d3b143355",
+    "products": "66b85a3483bc2c90e1a0229817a700164a83b80b9525c76b330fadfcb1c800e6"
+  },
+  "coverage_start": "2023-11-13",
+  "coverage_end_exclusive": "2024-01-08",
+  "source_as_of_demo": "2024-01-28T00:00:00+00:00",
+  "timezone": "UTC",
+  "currency_demo": "USD",
+  "rows": 14208,
+  "orders": 9812,
+  "skus": 11248,
+  "returned_lines": 2245,
+  "included_order_statuses": {
+    "Complete": 3818,
+    "Returned": 1541,
+    "Shipped": 4453
+  },
+  "assumptions": [
+    "Complete/Shipped/Returned are treated as paid; Processing/Cancelled excluded.",
+    "orders.created_at is used as a surrogate paid_at; each item has quantity one.",
+    "Returned is treated as fully refunded; other included statuses have zero refunds.",
+    "Return restocking is unknown; costs are not reversed and margin is estimated.",
+    "USD and source_as_of are demo conventions, not verified source fields.",
+    "Static product costs apply throughout the selected period; SKU is TL-product_id.",
+    "Prices rounded HALF_UP to cents; costs to six decimals."
+  ],
+  "weekly_independent_control": {
+    "start": "2024-01-01",
+    "end_exclusive": "2024-01-08",
+    "paid_orders": 1607,
+    "paid_units": 2377,
+    "gross_sales": "140141.09",
+    "refund_amount": "23780.74",
+    "net_sales": "116360.35",
+    "net_cogs_estimated": "67450.26",
+    "gross_profit_estimated": "48910.09"
+  },
+  "output_sha256": {
+    "orders.csv": "dd5d77e345d6496639c821bc96ca4ca6c39bcf5c06086a6209128fce5c5b0e90",
+    "costs.csv": "eba0e6a581fda47c128065265946708a6e6703e98a5a85d8fe0a6d67dd491b9a"
+  },
+  "license_note": "Public mirror; no independent dataset redistribution license verified. Project code license does not license source data."
+}

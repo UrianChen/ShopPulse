@@ -1,0 +1,46 @@
+ShopPulse — Third-party notices
+
+ShopPulse-owned code and documentation are licensed under the MIT License.
+Copyright (c) 2026 陈实当 CHEN SHIDANG (UrianChen)
+See the root LICENSE file for the complete terms.
+
+Third-party components, fonts and external demonstration data retain their own
+licenses and are excluded from ShopPulse's MIT grant. These notices supplement,
+but do not replace, the original third-party license texts.
+
+TheLook demonstration data:
+  Provenance and conversion assumptions: samples/thelook/provenance.json
+  Independent redistribution permission for the public CSV mirror has not been
+  verified. The project's MIT license does not grant rights to that source data.
+
+Runtime dependencies:
+  Python versions: backend/uv.lock
+  JavaScript versions: frontend/package-lock.json
+  Installed runtime inventory: licenses/dependency-inventory.json
+  Bundled Python license texts: licenses/python/
+  Bundled JavaScript license texts: licenses/npm/
+
+Regenerate the inventory after installing the locked dependencies with:
+  backend/.venv/Scripts/python.exe scripts/dependency_inventory.py
+On Linux/macOS use backend/.venv/bin/python.
+
+The inventory records available runtime distribution metadata and license texts.
+Platform-specific packages absent from the current environment are marked as
+such. License summaries in JSON are abbreviated; retain the complete notices.
+Development tools use their respective upstream licenses. The language package
+inventory is not a complete SBOM for container system packages. Redistributed
+images also require applicable Debian/Alpine, Chromium, PostgreSQL, Nginx and
+other system package notices and source availability information.
+
+Bundled font:
+  Name: Noto Sans SC variable font
+  License: SIL Open Font License 1.1
+  Complete license and copyright: backend/assets/fonts/OFL.txt
+  Source: https://github.com/google/fonts/blob/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf
+  Retrieved: 2026-10-09
+  Original SHA-256: a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da
+
+The application subsets this font to report characters and instantiates weight
+400 using fontTools. The embedded derivative is renamed ShopPulseReportFont.
+No external font service is contacted during export. Retain OFL.txt when
+redistributing the font; its license is separate from the application license.

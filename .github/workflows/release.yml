@@ -1,0 +1,27 @@
+name: Build source package
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+  package:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+          python-version: '3.12'
+      - run: uv sync --frozen
+        working-directory: backend
+      - run: backend/.venv/bin/python scripts/check_versions.py
+      - run: python scripts/test_release.py && python scripts/check_secrets.py
+      - run: python scripts/release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shoppulse-source
+          path: output/releases/*
+          if-no-files-found: error

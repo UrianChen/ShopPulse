@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "currency": "CNY",
+  "current": {
+    "gross_sales_minor": 65000,
+    "refund_amount_minor": 10000,
+    "net_sales_minor": 55000,
+    "paid_orders": 3,
+    "paid_units": 6,
+    "net_cogs_minor": 32000,
+    "gross_profit_minor": 23000
+  },
+  "previous": {
+    "gross_sales_minor": 50000,
+    "refund_amount_minor": 0,
+    "net_sales_minor": 50000,
+    "paid_orders": 2,
+    "paid_units": 5,
+    "net_cogs_minor": 30000,
+    "gross_profit_minor": 20000
+  }
+}

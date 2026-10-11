@@ -1,0 +1,16 @@
+# Opt-in synthetic provider for local demonstration and CI. Never use real API keys here.
+services:
+  api:
+    environment:
+      MODEL_ALLOWED_ORIGINS: '["http://mock-provider:8099"]'
+  worker:
+    environment:
+      MODEL_ALLOWED_ORIGINS: '["http://mock-provider:8099"]'
+  mock-provider:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["python", "-m", "app.providers.mock_server", "--host", "0.0.0.0", "--port", "8099"]
+    init: true
+    read_only: true
+    tmpfs: ["/tmp"]

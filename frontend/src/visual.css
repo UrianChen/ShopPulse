@@ -1,0 +1,81 @@
+/* Final shared control and content styles; feature sheets only own their layout. */
+.field { color: #435c4e; font-size: 13px; margin: 12px 0; gap: 7px; font-weight: 500; }
+.field input, .field select, .field textarea, .dashboard select { color: #263f32; font-size: 14px; font-weight: 400; padding: 10px 12px; border-radius: 8px; min-height: 42px; border-color: #d7dfd6; }
+.field input::placeholder { font-size: 13px; color: #7a877b; }
+.form-hint, .panel-title p, .empty-copy { color: #657568; font-size: 13px; line-height: 1.7; }
+.panel-title>span { color: #657568; font-size: 12px; }
+.text-button, .back-link { color: #2f6349; font-size: 13px; }
+.secondary { font-size: 13px; border-color: #d5ded3; color: #3b614b; }
+.form-grid, .mapping-grid { column-gap: 20px; }
+.form-actions { gap: 10px; margin-top: 22px; }
+.check-field { font-size: 13px; color: #4c6652; gap: 10px; }
+.check-field input { min-width: 17px; height: 17px; margin-top: 3px; }
+.advanced-settings { border: 1px solid #e3e8df; border-radius: 9px; padding: 12px 16px; margin: 18px 0; background: #fafbf8; }
+summary { cursor: pointer; font-size: 13px; color: #47604c; }
+summary::marker { color: #84997b; }
+.advanced-settings[open]>summary { margin-bottom: 12px; }
+.table-scroll { border: 1px solid #e4e9e0; border-radius: 9px; margin-top: 18px; }
+table { font-size: 13px; font-variant-numeric: tabular-nums; }
+th { font-size: 12px; font-weight: 600; color: #5c6f5c; background: #f6f8f2; padding: 13px 16px; }
+td { font-size: 13px; color: #3d5743; padding: 14px 16px; }
+tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: #fafbf8; }
+.import-state { font-size: 12px; padding: 4px 9px; border-radius: 5px; color: #586e4e; background: #f0f4ea; }
+.state-published, .state-ready { color: #3d6b38; background: #edf5e4; }
+.state-review_required { color: #8a601f; background: #fff4d9; }
+.state-failed, .issue-error { color: #9c4138; }
+.state-validating, .state-publishing { color: #386777; }
+.issue-warning { color: #89631d; }
+.file-drop { min-height: 185px; background: #f7faf1; border-color: #a5be99; gap: 10px; }
+.file-drop:focus-within { outline: 3px solid #6d9c84; outline-offset: 3px; }
+.file-drop strong { font-size: 15px; color: #3f684a; }.file-drop>span { color: #697b61; font-size: 12px; }
+.kind-switch button { min-height: 40px; font-size: 13px; color: #5e7158; padding: 8px 22px; }
+.sample-links { gap: 14px; font-size: 12px; }.sample-links a { min-height: 36px; }
+.version-row strong { font-size: 14px; font-weight: 500; }.version-row p { font-size: 12px; color: #64795b; }
+.version-row:last-child { border: 0; }
+.mapping-grid .field { margin: 10px 0; }
+.quality-stats strong { color: #3a663a; font-variant-numeric: tabular-nums; }
+.quality-stats span { color: #65775a; }
+.publish-actions p { font-size: 12px; color: #68785c; }
+.dashboard-filters { padding: 20px 24px; }
+.dashboard .panel-title h2 { font-size: 15px; }
+.filter-grid { gap: 0 16px; }.filter-grid .field { margin: 10px 0; }
+.sku-controls { display: grid; grid-template-columns: minmax(0,1fr) auto; column-gap: 22px; align-items: end; padding-top: 6px; }
+.sku-controls>.field { margin-bottom: 0; max-width: 440px; }.sku-controls>div.sku-chips { grid-column: 1; grid-row: 2; margin-top: 8px; }.sku-chips:empty { display: none; }
+.sku-controls .filter-actions { flex-direction: column; align-items: flex-end; gap: 8px; grid-column: 2; grid-row: 1 / 3; margin: 0; }
+.filter-actions>span { color: #67775d; font-size: 12px; }
+.metric-card { padding: 22px; border-radius: 12px; border-color: #dfe6da; }
+.metric-card.featured { background: #eaf1dc; border-color: #dbe6c9; }
+.metric-label { color: #596f50; font-size: 13px; }.metric-value { color: #294e35; font-size: 30px; letter-spacing: -1px; margin: 15px 0 10px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.metric-change { color: #466b43; font-size: 12px; }.metric-baseline { color: #647758; font-size: 12px; }.estimate,.unavailable-reason { font-size: 12px; color: #7e682b; }
+.quality-notes { color: #7c632a; background: #faf6e9; font-size: 13px; padding: 14px 18px; border-color: #e9dfc1; }
+.axis-label { fill: #64795e; font-size: 12px; }
+.trend-figure figcaption { color: #61745b; font-size: 12px; }.trend-figure figcaption strong { color: #3d673e; }
+.contribution-row>div:first-child { font-size: 13px; color: #4e6844; }.contribution-track { height: 6px; }.contribution-track span { background: #779f68; }.contribution-track span.negative { background: #b28364; }
+.effects, .effects p { font-size: 12px; color: #66785a; }.effects strong { color: #456c3d; font-size: 17px; }
+.product-controls label { font-size: 13px; color: #5c724f; }.product-panel td,.product-panel td strong { font-size: 13px; }.product-panel td small { font-size: 12px; }
+.model-result { padding: 16px; background: #f7f8f3; }.model-result.usable { background: #f0f6e9; }.model-result strong { color: #3f6338; }
+.model-card-title h2 { font-size: 18px; }.model-card-title p,.model-meta,.model-result small { color: #65775b; }.model-meta { font-size: 12px; }
+.model-consent { background: #f5f8ef; color: #435f36; }.model-consent p { color: #5e7251; font-size: 13px; }.model-editor { max-width: 960px; }
+.capability-list>div { font-size: 13px; }.passed { color: #3c7237; }.limited { color: #886220; }
+.report-list { gap: 12px; }.report-list-item { padding: 22px 24px; }.report-list-item h2 { font-size: 16px; }.report-list-item p,.report-list-item small { font-size: 12px; color: #65755c; margin-top: 6px; }
+.report-status { padding: 14px 18px; color: #476b3b; font-size: 13px; }.report-status>span { color: #5e784e; }
+.report-metrics>div { border-radius: 12px; }.report-metrics strong { font-size: 30px; color: #2e5839; font-weight: 550; font-variant-numeric: tabular-nums; }.report-metrics>div>span { color: #637654; font-size: 13px; }
+.report-sentences p, .report-finding p, .report-advice p, .report-limitations, .question-list article>p { font-size: 14px; line-height: 1.9; color: #526d46; }
+.evidence-link { min-height: 32px; font-size: 12px; color: #386a3b; }.report-finding h3,.question-list h3 { font-size: 15px; color: #45673b; }
+.rule-checks p { font-size: 13px; }.rule-checks span { color: #6e7c5f; }.report-warning { color: #88612e; font-size: 13px; }
+.evidence-list button { min-height: 48px; font-size: 13px; color: #4c7040; }.evidence-list span { font-size: 11px; color: #6d7e5e; }
+.evidence-drawer pre, .reports pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: #f6f8f2; padding: 16px; border-radius: 8px; }
+.original-language-note { margin: 12px 0; font-size: 12px; color: #6c7b62; }
+.operations .table-scroll { max-height: 390px; }.operations th { position: sticky; top: 0; }.operations th,.operations td { font-size: 13px; padding: 14px; }
+.operations small { color: #67785f; font-size: 12px; }.operations .mono { font-size: 11px; }.ops-stats { gap: 14px; }.ops-stats>div { background: #f4f7ed; }.ops-stats strong { color: #375f33; font-size: 25px; font-variant-numeric: tabular-nums; }.ops-stats span,.ops-stats small { color: #637958; }
+.export-list>div { font-size: 13px; align-items: center; }.export-list small { color: #64785a; }.deletion-preview { background: #fff6ee; color: #884d32; border-color: #ebceba; }
+.pagination { color: #657759; font-size: 13px; gap: 14px; }
+
+/* Keep primary data accessible even with a long import or worker history. */
+.data-center>.panel>.table-scroll { max-height: 370px; }
+.data-center>.panel>.table-scroll th { position: sticky; top: 0; z-index: 1; }
+.version-grid>.panel { max-height: 440px; overflow-y: auto; }
+.worker-details { margin: 12px 0; }
+.capability-details { margin-top: 12px; }
+.capability-details summary { color: #5b7450; font-size: 12px; }
