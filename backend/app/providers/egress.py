@@ -46,7 +46,7 @@ def normalize_url(value: str) -> str:
         if (
             not re.fullmatch(r"(?:/[A-Za-z0-9_.~-]+)*", path)
             or any(p in {".", ".."} for p in path.split("/"))
-            or path.endswith(("/chat/completions", "/responses", "/completions"))
+            or path.endswith(("/chat/completions", "/responses", "/completions", "/messages"))
         ):
             raise ValueError
         authority = f"[{host}]" if ":" in host else host
@@ -110,7 +110,10 @@ class PinnedConnection(http.client.HTTPConnection):
             raise
 
 
-def post(url: str, key: str, payload: dict, timeout: float) -> dict:
+def post(url: str, key: str, payload: dict, timeout: float, protocol: str = "openai_chat") -> dict:
+    from app.providers.protocols import ENDPOINTS
+    from app.providers.protocols import headers as protocol_headers
+
     url = normalize_url(url)
     parsed = urlsplit(url)
     addresses = validate_target(url)
@@ -122,11 +125,9 @@ def post(url: str, key: str, payload: dict, timeout: float) -> dict:
         timeout,
     )
     try:
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
+        headers = protocol_headers(protocol, key)
         connection.request(
-            "POST", parsed.path + "/chat/completions", json.dumps(payload).encode(), headers
+            "POST", parsed.path + ENDPOINTS[protocol], json.dumps(payload).encode(), headers
         )
         response = connection.getresponse()
         status = response.status
@@ -157,6 +158,69 @@ def post(url: str, key: str, payload: dict, timeout: float) -> dict:
         raise ProviderError("TLS_FAILED") from None
     except (ValueError, UnicodeError, RecursionError):
         raise ProviderError("INVALID_RESPONSE") from None
+    except (OSError, http.client.HTTPException):
+        raise ProviderError("NETWORK_ERROR") from None
+    finally:
+        connection.close()
+
+
+def normalize_webhook_url(value: str) -> str:
+    """Exact notification URL: HTTP(S), no credentials or fragment; a query token is allowed."""
+    try:
+        if not value or len(value) > 1000 or re.search(r"[\s\\]", value):
+            raise ValueError
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"https", "http"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+            or "#" in value
+        ):
+            raise ValueError
+        base = normalize_url(urlunsplit((parsed.scheme, parsed.netloc, "", "", "")))
+        path = parsed.path or "/"
+        if not re.fullmatch(r"(?:/[A-Za-z0-9_.~%:@!$&'()*+,;=-]*)+", path) or "/../" in path + "/":
+            raise ValueError
+        return base + path + ("?" + parsed.query if parsed.query else "")
+    except (ValueError, UnicodeError, ProviderError):
+        raise ProviderError("INVALID_WEBHOOK_URL") from None
+
+
+def post_webhook(url: str, body: dict, timeout: float = 10) -> int:
+    """Deliver a notification through the same DNS-pinned, no-redirect, no-proxy policy."""
+    url = normalize_webhook_url(url)
+    parsed = urlsplit(url)
+    addresses = validate_target(urlunsplit((parsed.scheme, parsed.netloc, "", "", "")))
+    connection = PinnedConnection(
+        parsed.hostname,
+        parsed.port or (443 if parsed.scheme == "https" else 80),
+        addresses[0],
+        parsed.scheme == "https",
+        timeout,
+    )
+    try:
+        target = parsed.path + ("?" + parsed.query if parsed.query else "")
+        connection.request(
+            "POST",
+            target,
+            json.dumps(body, ensure_ascii=False).encode(),
+            {"Content-Type": "application/json", "User-Agent": "ShopPulse-Webhook/2"},
+        )
+        response = connection.getresponse()
+        response.read(65536)  # Drain a bounded body; never store or log it.
+        if 300 <= response.status < 400:
+            raise ProviderError("REDIRECT_BLOCKED", response.status)
+        if not 200 <= response.status < 300:
+            raise ProviderError("WEBHOOK_REJECTED", response.status)
+        return response.status
+    except ProviderError:
+        raise
+    except TimeoutError:
+        raise ProviderError("TIMEOUT") from None
+    except ssl.SSLError:
+        raise ProviderError("TLS_FAILED") from None
     except (OSError, http.client.HTTPException):
         raise ProviderError("NETWORK_ERROR") from None
     finally:

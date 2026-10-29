@@ -29,7 +29,7 @@ def probe(config, key):
     )
     try:
         output, _ = process.communicate(
-            json.dumps({"config": config, "key": key}).encode(), timeout=90
+            json.dumps({"config": config, "key": key}).encode(), timeout=110
         )
         if process.returncode != 0:
             raise ProviderError("NETWORK_ERROR")
@@ -52,7 +52,13 @@ def execute(job):
             raise RuntimeError("Stale configuration")
         config = {
             field: getattr(item, field)
-            for field in ("base_url", "model_name", "timeout_seconds", "token_limit_parameter")
+            for field in (
+                "base_url",
+                "model_name",
+                "protocol",
+                "timeout_seconds",
+                "token_limit_parameter",
+            )
         }
         try:
             key = decrypt(item)

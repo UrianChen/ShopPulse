@@ -58,50 +58,55 @@ def request_snapshot(db, dataset, query):
     return cached
 
 
+def load_rows(db, dataset, query, limit=None):
+    """Calculator inputs only; avoid ORM identity-map overhead for 100,000 rows."""
+    options = dataset.snapshot["config"]["options"]
+    start = min(query.start, query.compare_start or query.start)
+    end = max(query.end_exclusive, query.compare_end_exclusive or query.end_exclusive)
+    statement = select(
+        OrderLine.order_id,
+        OrderLine.sku,
+        OrderLine.product_name,
+        OrderLine.paid_at,
+        OrderLine.quantity,
+        OrderLine.line_paid_minor,
+        OrderLine.line_refund_minor,
+        OrderLine.restocked_quantity,
+        OrderLine.unit_cost,
+        OrderLine.quality,
+    ).where(
+        OrderLine.dataset_id == dataset.id,
+        OrderLine.paid_at >= timestamp(start.isoformat(), options["timezone"]),
+        OrderLine.paid_at < timestamp(end.isoformat(), options["timezone"]),
+    )
+    if query.skus:
+        statement = statement.where(OrderLine.sku.in_(query.skus))
+    statement = statement.order_by(OrderLine.source_row_number)
+    if limit is not None:
+        statement = statement.limit(limit + 1)
+    return [
+        {
+            "order_id": r.order_id,
+            "sku": r.sku,
+            "product_name": r.product_name,
+            "paid_at": r.paid_at.isoformat(),
+            "quantity": r.quantity,
+            "line_paid_minor": r.line_paid_minor,
+            "line_refund_minor": r.line_refund_minor,
+            "restocked_quantity": r.restocked_quantity,
+            "unit_cost": str(r.unit_cost) if r.unit_cost is not None else None,
+            "quality": r.quality,
+        }
+        for r in db.execute(statement.execution_options(yield_per=2000))
+    ]
+
+
 def execute(job):
     with Session(db_module.engine()) as db:
         cached = db.get(MetricSnapshot, uuid.UUID(job.payload["snapshot_id"]))
         dataset = db.get(DatasetVersion, cached.dataset_id)
         query = MetricQuery.model_validate(cached.query)
-        options = dataset.snapshot["config"]["options"]
-        start = min(query.start, query.compare_start or query.start)
-        end = max(query.end_exclusive, query.compare_end_exclusive or query.end_exclusive)
-        # Fetch only calculator inputs; avoid ORM identity-map overhead for 100,000 rows.
-        statement = select(
-            OrderLine.order_id,
-            OrderLine.sku,
-            OrderLine.product_name,
-            OrderLine.paid_at,
-            OrderLine.quantity,
-            OrderLine.line_paid_minor,
-            OrderLine.line_refund_minor,
-            OrderLine.restocked_quantity,
-            OrderLine.unit_cost,
-            OrderLine.quality,
-        ).where(
-            OrderLine.dataset_id == dataset.id,
-            OrderLine.paid_at >= timestamp(start.isoformat(), options["timezone"]),
-            OrderLine.paid_at < timestamp(end.isoformat(), options["timezone"]),
-        )
-        if query.skus:
-            statement = statement.where(OrderLine.sku.in_(query.skus))
-        rows = [
-            {
-                "order_id": r.order_id,
-                "sku": r.sku,
-                "product_name": r.product_name,
-                "paid_at": r.paid_at.isoformat(),
-                "quantity": r.quantity,
-                "line_paid_minor": r.line_paid_minor,
-                "line_refund_minor": r.line_refund_minor,
-                "restocked_quantity": r.restocked_quantity,
-                "unit_cost": str(r.unit_cost) if r.unit_cost is not None else None,
-                "quality": r.quality,
-            }
-            for r in db.execute(
-                statement.order_by(OrderLine.source_row_number).execution_options(yield_per=2000)
-            )
-        ]
+        rows = load_rows(db, dataset, query)
         request = {"rows": rows, "snapshot": dataset.snapshot, "query": cached.query}
     result = isolated(
         request, job.workspace_id, module="app.metrics.runner", memory_mib=1536, job=job

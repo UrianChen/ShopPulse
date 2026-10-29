@@ -1,85 +1,210 @@
-import re
-from decimal import Decimal, localcontext
+"""Validate model output against frozen evidence and render it with server-owned values."""
 
-from app.reports.schema import Analysis
-from app.reports.tools import LIMITATIONS, digest, metric_facts
+from pydantic import ValidationError
+
+from app.reports.grammar import EvidenceError, check_sentence, entities, free_text_issues, issue
+from app.reports.schema import AnswerAnalysis, ReportAnalysis
+from app.reports.tools import digest, limitations
 
 
-def render(sentence, evidence, currency, exponent):
-    binding = sentence["bindings"]["value"]
-    ev = next(e for e in evidence if e["evidence_id"] == binding["evidence_id"])
-    value = ev["payload"]
-    for part in binding["path"].split("."):
-        value = value[part]
-    with localcontext() as context:
-        context.prec = 70
-        amount = Decimal(value["value"])
-        formatted = (
-            f"{currency} {amount / (Decimal(10) ** exponent):,.{exponent}f}"
-            if binding["format"] == "money"
-            else f"{amount * 100:,.2f}%"
-            if binding["format"] == "percent"
-            else f"{amount:,.0f}"
-        )
-    if value["quality"] == "estimated":
-        formatted += "（估算）"
+def context(evidence, currency, exponent, language="zh", include_names=False):
     return {
-        **sentence,
-        "text": sentence["text_template"].replace("{{value}}", formatted),
-        "evidence_refs": [binding["evidence_id"]],
+        "evidence": {e["evidence_id"]: e for e in evidence},
+        "entities": entities(evidence),
+        "currency": currency,
+        "exponent": exponent,
+        "language": language,
+        "include_names": include_names,
     }
 
 
-def validate_analysis(raw, evidence, report_id, dataset_id, currency, exponent, scope=None):
-    analysis = Analysis.model_validate(raw).model_dump()
-    ids = {e["evidence_id"] for e in evidence}
-    if any(
-        e["report_id"] != report_id
-        or e["dataset_id"] != dataset_id
-        or (scope is not None and e["scope"] != scope)
-        or digest(e["payload"]) != e["result_hash"]
-        for e in evidence
-    ):
-        raise ValueError("EVIDENCE_SCOPE")
-    allowed = metric_facts(evidence)
-    sentences = analysis["summary"] + [f["observation"] for f in analysis["findings"]]
-    # Facts are selected from server-authored grammar, not arbitrary prose with appended citations.
-    if any(sentence not in allowed for sentence in sentences):
-        raise ValueError("UNBOUND_FACT")
-    finding_ids = [f["id"] for f in analysis["findings"]]
-    if len(set(finding_ids)) != len(finding_ids):
-        raise ValueError("DUPLICATE_FINDING")
-    free_text = []
-    for finding in analysis["findings"]:
-        if finding["title"] not in {"经营观察", "退款观察", "成本观察", "商品观察", "周期观察"}:
-            raise ValueError("UNVERIFIED_TITLE")
-        refs = set(finding["evidence_refs"])
-        bound = finding["observation"]["bindings"]["value"]["evidence_id"]
-        if not refs <= ids or bound not in refs:
-            raise ValueError("EVIDENCE_REFERENCE")
-        free_text += [finding["title"], *finding["hypotheses"], *finding["limitations"]]
-        finding["kind"] = "observation"
-        finding["observation"] = render(finding["observation"], evidence, currency, exponent)
-        finding["limitations"] = list(dict.fromkeys(finding["limitations"] + LIMITATIONS))
-    for recommendation in analysis["recommendations"]:
-        if not set(recommendation["rationale_finding_ids"]) <= set(finding_ids):
-            raise ValueError("FINDING_REFERENCE")
-        free_text.append(recommendation["action"])
-    for text in free_text:
-        # Numbers, SKUs and definitive claims have no free-text channel. Actions are proposals.
+def render(sentence, evidence, currency, exponent, language="zh", include_names=False):
+    """Render a server-authored fact (deterministic summaries and fallbacks)."""
+    issues, rendered = check_sentence(
+        sentence, "fact", context(evidence, currency, exponent, language, include_names), True
+    )
+    if issues:
+        raise EvidenceError(issues)
+    return rendered
+
+
+def schema_issues(error):
+    return [
+        issue(
+            ".".join(str(part) for part in item["loc"]) or "$",
+            "SCHEMA_" + item["type"].upper().replace(".", "_")[:40],
+            item["msg"][:120],
+        )
+        for item in error.errors()[:8]
+    ]
+
+
+def check_scope(evidence, report_id, dataset_id, scope):
+    for e in evidence:
         if (
-            len(text) > 300
-            or any(character.isnumeric() for character in text)
-            or re.search(
-                r"[两半倍%％<>]|https?://|SKU|保证|必然|确定导致|"
-                r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|"
-                r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
-                r"twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|"
-                r"million|billion|percent|double|triple|half|quarter)\b",
-                text,
-                re.I,
-            )
+            e["report_id"] != report_id
+            or e["dataset_id"] != dataset_id
+            or (scope is not None and e["scope"] != scope)
+            or digest(e["payload"]) != e["result_hash"]
         ):
-            raise ValueError("UNBOUND_NUMBER_OR_CLAIM")
-    analysis["summary"] = [render(s, evidence, currency, exponent) for s in analysis["summary"]]
-    return analysis
+            raise EvidenceError([issue("evidence", "EVIDENCE_SCOPE")])
+
+
+def _findings(items, ctx, prefix, language):
+    issues, rendered = [], []
+    for i, finding in enumerate(items):
+        at = f"{prefix}[{i}]"
+        found = free_text_issues(finding["title"], at + ".title", ctx, 60)
+        found_obs, observation = check_sentence(
+            finding["observation"], at + ".observation", ctx, True
+        )
+        supporting, hypotheses, hypothesis_text = [], [], []
+        found += found_obs
+        for j, sentence in enumerate(finding["supporting"]):
+            problems, value = check_sentence(sentence, f"{at}.supporting[{j}]", ctx, True)
+            found += problems
+            supporting.append(value)
+        for j, sentence in enumerate(finding["hypotheses"]):
+            problems, value = check_sentence(sentence, f"{at}.hypotheses[{j}]", ctx, False)
+            found += problems
+            hypotheses.append(value)
+        issues += found
+        if found:
+            continue
+        hypothesis_text = [h["text"] for h in hypotheses]
+        refs = observation["evidence_refs"] + [
+            ref for item in supporting + hypotheses for ref in item["evidence_refs"]
+        ]
+        rendered.append(
+            {
+                "id": finding["id"],
+                "topic": finding["topic"],
+                "title": finding["title"],
+                "kind": "observation",
+                "observation": observation,
+                "supporting": supporting,
+                "hypotheses": hypothesis_text,
+                "hypothesis_sentences": hypotheses,
+                "evidence_refs": list(dict.fromkeys(refs)),
+                "limitations": limitations(language),
+            }
+        )
+    ids = [f["id"] for f in items]
+    if len(set(ids)) != len(ids):
+        issues.append(issue(prefix, "DUPLICATE_FINDING"))
+    return issues, rendered
+
+
+def _recommendations(items, finding_ids, findings, ctx, prefix):
+    issues, rendered = [], []
+    refs_by_finding = {f["id"]: f["evidence_refs"] for f in findings}
+    for i, item in enumerate(items):
+        at = f"{prefix}[{i}]"
+        problems, action = check_sentence(item["action"], at + ".action", ctx, False)
+        if not set(item["rationale_finding_ids"]) <= set(finding_ids):
+            problems.append(issue(at + ".rationale_finding_ids", "FINDING_REFERENCE"))
+        issues += problems
+        if problems:
+            continue
+        refs = action["evidence_refs"] + [
+            ref for fid in item["rationale_finding_ids"] for ref in refs_by_finding.get(fid, [])
+        ]
+        rendered.append(
+            {
+                **{k: item[k] for k in item if k != "action"},
+                "action": action["text"],
+                "action_sentence": action,
+                "evidence_refs": list(dict.fromkeys(refs)),
+            }
+        )
+    return issues, rendered
+
+
+def validate_analysis(
+    raw,
+    evidence,
+    report_id,
+    dataset_id,
+    currency,
+    exponent,
+    scope=None,
+    language="zh",
+    include_names=False,
+):
+    try:
+        analysis = ReportAnalysis.model_validate(raw).model_dump(mode="json")
+    except ValidationError as error:
+        raise EvidenceError(schema_issues(error)) from None
+    check_scope(evidence, report_id, dataset_id, scope)
+    ctx = context(evidence, currency, exponent, language, include_names)
+    issues, summary = [], []
+    for i, sentence in enumerate(analysis["summary"]):
+        problems, value = check_sentence(sentence, f"summary[{i}]", ctx, True)
+        issues += problems
+        summary.append(value)
+    problems, findings = _findings(analysis["findings"], ctx, "findings", language)
+    issues += problems
+    ids = [f["id"] for f in analysis["findings"]]
+    problems, recommendations = _recommendations(
+        analysis["recommendations"], ids, findings, ctx, "recommendations"
+    )
+    issues += problems
+    if issues:
+        raise EvidenceError(issues)
+    return {"summary": summary, "findings": findings, "recommendations": recommendations}
+
+
+def validate_answer(
+    raw,
+    evidence,
+    report_id,
+    dataset_id,
+    currency,
+    exponent,
+    scope=None,
+    language="zh",
+    include_names=False,
+):
+    try:
+        analysis = AnswerAnalysis.model_validate(raw).model_dump(mode="json")
+    except ValidationError as error:
+        raise EvidenceError(schema_issues(error)) from None
+    check_scope(evidence, report_id, dataset_id, scope)
+    ctx = context(evidence, currency, exponent, language, include_names)
+    issues, answer = [], []
+    for i, sentence in enumerate(analysis["answer"]):
+        problems, value = check_sentence(sentence, f"answer[{i}]", ctx, True)
+        issues += problems
+        answer.append(value)
+    problems, findings = _findings(analysis["findings"], ctx, "findings", language)
+    issues += problems
+    ids = [f["id"] for f in analysis["findings"]]
+    problems, recommendations = _recommendations(
+        analysis["recommendations"], ids, findings, ctx, "recommendations"
+    )
+    issues += problems
+    clarify = None
+    if analysis["clarify"] is not None:
+        problems, clarify = check_sentence(analysis["clarify"], "clarify", ctx, False)
+        issues += problems
+    for i, option in enumerate(analysis["options"]):
+        issues += free_text_issues(option, f"options[{i}]", ctx, 40)
+    query = analysis["suggested_query"]
+    if query is not None:
+        from datetime import date
+
+        start, end = date.fromisoformat(query["start"]), date.fromisoformat(query["end_exclusive"])
+        if not 1 <= (end - start).days <= 366 or any(not s or len(s) > 128 for s in query["skus"]):
+            issues.append(issue("suggested_query", "INVALID_QUERY"))
+    if issues:
+        raise EvidenceError(issues)
+    return {
+        "kind": analysis["kind"],
+        "answer": answer,
+        "findings": findings,
+        "recommendations": recommendations,
+        "clarify": clarify,
+        "options": analysis["options"],
+        "suggested_query": query,
+        "summary": answer,
+    }

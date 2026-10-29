@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "notes": "Synthetic, deterministic datasets with injected changes. expect.rules are the anomaly rules the change is designed to trigger; entities are SKUs a good report names; forbidden are claims a report must never make.",
+  "cases": [
+    {
+      "id": "stable_week",
+      "description": "Ordinary week without injected changes.",
+      "data": {"seed": 11, "skus": 8},
+      "expect": {"rules": [], "forbidden": ["广告", "保证", "必然"]}
+    },
+    {
+      "id": "refund_spike",
+      "description": "One SKU has most of its current-period orders refunded.",
+      "data": {"seed": 7, "skus": 6, "mutations": [{"type": "refund_spike", "sku": "SP-AB", "rate": 0.9}]},
+      "expect": {"rules": ["HIGH_REFUND"], "entities": ["SP-AB"], "forbidden": ["广告", "保证"]}
+    },
+    {
+      "id": "sales_drop",
+      "description": "Two SKUs lose most of their sales in the current period.",
+      "data": {"seed": 3, "skus": 6, "mutations": [{"type": "sales_drop", "sku": "SP-AA", "factor": 0.1}, {"type": "sales_drop", "sku": "SP-AB", "factor": 0.1}]},
+      "expect": {"rules": ["SALES_CHANGE"], "entities_any": ["SP-AA", "SP-AB"], "forbidden": ["广告", "保证"]}
+    },
+    {
+      "id": "negative_margin",
+      "description": "One SKU is sold below cost.",
+      "data": {"seed": 5, "skus": 8, "mutations": [{"type": "negative_margin", "sku": "SP-AD", "ratio": 1.5}]},
+      "expect": {"rules": ["NEGATIVE_PROFIT"], "entities": ["SP-AD"], "forbidden": ["保证"]}
+    },
+    {
+      "id": "missing_cost",
+      "description": "One SKU has no cost records, so overall profit is unavailable.",
+      "data": {"seed": 9, "skus": 8, "mutations": [{"type": "missing_cost", "sku": "SP-AE"}]},
+      "expect": {"rules": [], "entities": ["SP-AE"], "forbidden": ["保证"]}
+    },
+    {
+      "id": "concentration",
+      "description": "Three SKUs surge and dominate current-period sales.",
+      "data": {"seed": 13, "skus": 10, "mutations": [{"type": "concentration", "skus": ["SP-AA", "SP-AB", "SP-AC"], "factor": 12}]},
+      "expect": {"rules": ["CONCENTRATION"], "forbidden": ["保证"]}
+    },
+    {
+      "id": "daily_outlier",
+      "description": "A single day has several times the usual sales (five-week report).",
+      "data": {"seed": 17, "skus": 8, "period_days": 35, "mutations": [{"type": "daily_outlier", "date": "2026-10-01", "factor": 8}]},
+      "expect": {"rules": ["DAILY_MAD"], "forbidden": ["保证"]}
+    },
+    {
+      "id": "promotion_note",
+      "description": "A SKU surges during a promotion the merchant recorded.",
+      "data": {"seed": 19, "skus": 6, "mutations": [{"type": "sales_surge", "sku": "SP-AB", "factor": 5}]},
+      "notes": [{"start": "2026-09-28", "end_exclusive": "2026-10-05", "kind": "promotion", "text": "国庆满减活动，覆盖 SP-AB 等主推商品"}],
+      "expect": {"rules": ["SALES_CHANGE"], "entities_any": ["SP-AB"], "note": true, "forbidden": ["保证"]}
+    },
+    {
+      "id": "refund_spike_en",
+      "description": "Refund spike, English report.",
+      "language": "en",
+      "data": {"seed": 7, "skus": 6, "mutations": [{"type": "refund_spike", "sku": "SP-AB", "rate": 0.9}]},
+      "expect": {"rules": ["HIGH_REFUND"], "entities": ["SP-AB"], "forbidden": ["guarantee", "advertis"]}
+    },
+    {
+      "id": "question_refunds",
+      "description": "Follow-up question about refunds on the refund-spike data.",
+      "kind": "question",
+      "intent": "refund_review",
+      "question": "这周退款为什么这么高？主要是哪个商品？",
+      "data": {"seed": 7, "skus": 6, "mutations": [{"type": "refund_spike", "sku": "SP-AB", "rate": 0.9}]},
+      "expect": {"entities": ["SP-AB"], "forbidden": ["保证"]}
+    }
+  ]
+}

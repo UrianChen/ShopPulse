@@ -2,6 +2,7 @@ import argparse
 import logging
 import signal
 import threading
+import time
 
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -9,6 +10,8 @@ from app.jobs.queue import claim, finish, heartbeat
 
 logger = logging.getLogger("shoppulse")
 stopping = threading.Event()
+SCHEDULER_INTERVAL = 30
+MAINTENANCE_INTERVAL = 600
 
 
 def run_one() -> bool:
@@ -53,6 +56,10 @@ def run_one() -> bool:
             from app.exports.service import execute as execute_export
 
             execute_export(job)
+        elif job.type == "notify_webhook":
+            from app.automation.notify import execute as execute_notify
+
+            execute_notify(job)
         else:
             finish(job, error_code="UNKNOWN_JOB_TYPE")
     except Exception:
@@ -97,14 +104,31 @@ def main():
     args = parser.parse_args()
     settings().validate_secrets()
     configure_logging(settings().log_level)
+    from app.observability.tracing import init as init_tracing
+
+    init_tracing("shoppulse-worker")
     signal.signal(signal.SIGTERM, lambda *_: stopping.set())
     signal.signal(signal.SIGINT, lambda *_: stopping.set())
     logger.info("worker_started", extra={"event": "worker_started"})
+    last_tick = last_maintenance = 0.0
     while not stopping.is_set():
         try:
             from app.ops.jobs import pulse
 
             pulse()
+            if time.monotonic() - last_maintenance >= MAINTENANCE_INTERVAL:
+                last_maintenance = time.monotonic()
+                from app.observability.retention import purge_debug
+
+                purge_debug()
+            if time.monotonic() - last_tick >= SCHEDULER_INTERVAL:
+                last_tick = time.monotonic()
+                from app.automation.scheduler import tick
+
+                try:
+                    tick()
+                except Exception:
+                    logger.error("scheduler_failed", extra={"event": "scheduler_failed"})
             worked = run_one()
         except Exception:
             logger.error("worker_dependency_error", extra={"event": "worker_dependency_error"})

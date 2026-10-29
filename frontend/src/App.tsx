@@ -1,11 +1,12 @@
 import { t, useLanguage, locale, message } from './lib/i18n';
 import { useQuery } from '@tanstack/react-query';
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
-import { Activity, ArrowRight, ChevronRight, CircleHelp, Database, FileBarChart2, Globe2, LayoutDashboard, Server, Settings2, Upload } from 'lucide-react';
+import { Activity, ArrowRight, CalendarClock, ChevronRight, CircleHelp, Database, FileBarChart2, Globe2, LayoutDashboard, Server, Settings2, Upload } from 'lucide-react';
 import { api, ApiError } from './lib/api';
 import type { Workspace } from './lib/api';
 import { NewReport, ReportDetail, ReportList } from './features/reports/Reports';
 import { Operations } from './features/Operations';
+import { Automation } from './features/automation/Automation';
 import { ModelSettings } from './features/models/ModelSettings';
 import { Dashboard } from './features/dashboard/Dashboard';
 import { DataCenter } from './features/imports/DataCenter';
@@ -41,14 +42,14 @@ function Shell() {
   const language = useLanguage();
   const location = useLocation();
   const workspace = useQuery({ queryKey: ['workspace'], queryFn: () => api<Workspace>('/workspace') });
-  const links = [{ to: '/', label: t("工作台"), icon: LayoutDashboard }, { to: '/data', label: t("数据中心"), icon: Database }, { to: '/dashboard', label: t("经营看板"), icon: Activity }, { to: '/reports', label: t("智能周报"), icon: FileBarChart2 }, { to: '/settings/models', label: t("模型设置"), icon: Settings2 }, { to: '/operations', label: t("运行管理"), icon: Server }];
+  const links = [{ to: '/', label: t("工作台"), icon: LayoutDashboard }, { to: '/data', label: t("数据中心"), icon: Database }, { to: '/dashboard', label: t("经营看板"), icon: Activity }, { to: '/reports', label: t("智能周报"), icon: FileBarChart2 }, { to: '/automation', label: t("自动化"), icon: CalendarClock }, { to: '/settings/models', label: t("模型设置"), icon: Settings2 }, { to: '/operations', label: t("运行管理"), icon: Server }];
   const current = links.find(l => l.to !== '/' && location.pathname.startsWith(l.to)) ?? links[0];
   return <div className="app-shell"><a className="skip-link" href="#main-content">{t("跳到主要内容")}</a><aside className="sidebar"><Link className="brand" to="/" aria-label="ShopPulse"><span className="brand-icon"><Activity size={23} /></span>ShopPulse<span className="brand-dot">.</span></Link>
     <div className="workspace-switch"><span className="workspace-avatar">S</span><strong>{workspace.data?.name ?? t("我的店铺")}</strong></div>
     <nav aria-label={t("主导航")}>{links.map(({to,label,icon:Icon}) => <NavLink key={to} to={to} end={to === '/'}><Icon size={19} /><span>{t(label)}</span></NavLink>)}</nav>
     <div className="sidebar-bottom"><span className="dot" />ShopPulse <span>{version}</span></div>
   </aside><div className="main-shell"><header className="topbar"><span className="breadcrumb">{current.label}</span><div className="language-control"><Globe2 size={16} /><div role="group" aria-label={t("界面语言")}><button type="button" lang="zh-CN" aria-pressed={language === 'zh'} onClick={() => setLanguage('zh')}>中文</button><button type="button" lang="en" aria-pressed={language === 'en'} onClick={() => setLanguage('en')}>EN</button></div></div></header>
-    <main id="main-content" className="content" tabIndex={-1}><ErrorNotice error={workspace.error} /><Routes><Route path="/" element={<WorkspaceHome />} /><Route path="/data" element={<DataCenter />} /><Route path="/dashboard" element={<Dashboard />} /><Route path="/settings/models" element={<ModelSettings />} /><Route path="/operations" element={<Operations />} /><Route path="/reports" element={<ReportList />} /><Route path="/reports/new" element={<NewReport />} /><Route path="/reports/:reportId" element={<ReportDetail />} /><Route path="*" element={<div className="panel not-found"><CircleHelp size={32} /><h1>{t("页面不存在")}</h1><Link className="primary" to="/">{t("返回工作台")}</Link></div>} /></Routes></main>
+    <main id="main-content" className="content" tabIndex={-1}><ErrorNotice error={workspace.error} /><Routes><Route path="/" element={<WorkspaceHome />} /><Route path="/data" element={<DataCenter />} /><Route path="/dashboard" element={<Dashboard />} /><Route path="/settings/models" element={<ModelSettings />} /><Route path="/operations" element={<Operations />} /><Route path="/automation" element={<Automation />} /><Route path="/reports" element={<ReportList />} /><Route path="/reports/new" element={<NewReport />} /><Route path="/reports/:reportId" element={<ReportDetail />} /><Route path="*" element={<div className="panel not-found"><CircleHelp size={32} /><h1>{t("页面不存在")}</h1><Link className="primary" to="/">{t("返回工作台")}</Link></div>} /></Routes></main>
   </div></div>;
 }
 export function App() {

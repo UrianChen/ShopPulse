@@ -1,9 +1,10 @@
-"""Small Chat Completions adapter. No provider text enters persisted probe results."""
+"""Protocol-aware connection probe. No provider text enters persisted probe results."""
 
 import json
 import time
 
 from app.providers.egress import ProviderError, post
+from app.providers.protocols import build, parse, text_of
 
 MESSAGES = {
     "AUTH_FAILED": "认证失败，请检查 API Key 与服务权限。",
@@ -12,8 +13,11 @@ MESSAGES = {
     "UNSUPPORTED_REQUEST": "服务不支持此请求参数或能力。",
     "PROVIDER_UNAVAILABLE": "模型服务暂不可用。",
     "PROVIDER_REJECTED": "模型服务拒绝了请求。",
+    "MODEL_REFUSED": "模型拒绝回答此请求。",
     "INVALID_RESPONSE": "服务响应未通过格式校验。",
-    "INVALID_BASE_URL": "请填写 API 根地址，不含凭证、查询参数或 chat/completions。",
+    "INVALID_BASE_URL": "请填写 API 根地址，不含凭证、查询参数或具体接口路径。",
+    "INVALID_WEBHOOK_URL": "请填写完整的 HTTPS 通知地址，不含账号密码。",
+    "WEBHOOK_REJECTED": "通知地址拒绝了请求。",
     "EGRESS_BLOCKED": "目标地址被出站策略阻止；本地服务需由部署者配置精确来源白名单。",
     "REDIRECT_BLOCKED": "服务返回重定向，请使用最终 API 根地址。",
     "DNS_FAILED": "无法解析模型服务域名。",
@@ -23,6 +27,22 @@ MESSAGES = {
     "BUDGET_EXCEEDED": "连接测试已达到时间或请求次数上限。",
     "RESPONSE_TOO_LARGE": "模型响应超过大小限制。",
     "CREDENTIAL_UNAVAILABLE": "后端无法解密凭证，请检查主密钥。",
+}
+PROBE_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
+    "additionalProperties": False,
+}
+ECHO_TOOL = {
+    "name": "echo_probe",
+    "description": "Synthetic echo",
+    "parameters": {
+        "type": "object",
+        "properties": {"token": {"type": "string"}},
+        "required": ["token"],
+        "additionalProperties": False,
+    },
 }
 
 
@@ -36,42 +56,35 @@ def failure(error):
 
 
 def message(body):
-    try:
-        choices = body["choices"]
-        if not isinstance(choices, list) or len(choices) != 1:
-            raise ValueError
-        choice = choices[0]
-        value = choice["message"]
-        if not isinstance(value, dict) or value.get("role") != "assistant":
-            raise ValueError
-        if choice.get("finish_reason") not in {"stop", "tool_calls"} or value.get("refusal"):
-            raise ValueError
-        return value
-    except (ValueError, KeyError, TypeError, IndexError):
-        raise ProviderError("INVALID_RESPONSE") from None
+    """v1 helper: validate an OpenAI Chat body and return its assistant message."""
+    return parse("openai_chat", body)["visible"]
 
 
 def text_content(value):
-    content = value.get("content")
-    if not isinstance(content, str) or not content.strip() or value.get("tool_calls"):
-        raise ProviderError("INVALID_RESPONSE")
-    return content
+    return text_of(value)
 
 
 class ProviderAdapter:
     def __init__(self, config, key, transport=post):
         self.config, self.key, self.transport = config, key, transport
-        self.deadline = time.monotonic() + 85
+        self.protocol = config.get("protocol") or "openai_chat"
+        self.deadline = time.monotonic() + 100
         self.requests = 0
 
-    def complete(self, messages, **options):
-        payload = {"model": self.config["model_name"], "messages": messages, **options}
-        parameter = self.config.get("token_limit_parameter", "none")
-        if parameter in {"max_tokens", "max_completion_tokens"}:
-            payload[parameter] = 256
+    def complete(self, messages, tools=None, tool_choice=None, output=None):
+        payload = build(
+            self.protocol,
+            self.config["model_name"],
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            output=output,
+            max_tokens=256 if self.protocol != "anthropic_messages" else 2048,
+            token_parameter=self.config.get("token_limit_parameter", "none"),
+        )
         for attempt in range(2):
             remaining = self.deadline - time.monotonic()
-            if remaining <= 0 or self.requests >= 6:
+            if remaining <= 0 or self.requests >= 8:
                 raise ProviderError("BUDGET_EXCEEDED")
             self.requests += 1
             try:
@@ -80,8 +93,9 @@ class ProviderAdapter:
                     self.key,
                     payload,
                     min(self.config["timeout_seconds"], remaining),
+                    protocol=self.protocol,
                 )
-                return message(body)
+                return parse(self.protocol, body)
             except ProviderError as error:
                 if attempt == 0 and error.code in {"RATE_LIMITED", "PROVIDER_UNAVAILABLE"}:
                     time.sleep(0.25)
@@ -104,79 +118,53 @@ class ProviderAdapter:
                 stages[name] = failure(error)
             return stages[name]["ok"]
 
-        if not run(
-            "basic",
-            lambda: text_content(
-                self.complete(
-                    [
-                        {
-                            "role": "user",
-                            "content": "Reply with just OK. This is a synthetic connection test.",
-                        }
-                    ]
-                )
-            ),
-        ):
+        basic = [
+            {"role": "user", "content": "Reply with just OK. This is a synthetic connection test."}
+        ]
+        if not run("basic", lambda: text_of(self.complete(basic))):
             return {
                 "usable": False,
                 "strategy": "unavailable",
+                "protocol": self.protocol,
                 "stages": stages,
                 "requests": self.requests,
             }
 
         def tools_probe():
-            messages = [{"role": "user", "content": "Call echo_probe with token pulse-test."}]
-            tool = {
-                "type": "function",
-                "function": {
-                    "name": "echo_probe",
-                    "description": "Synthetic echo",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"token": {"type": "string"}},
-                        "required": ["token"],
-                        "additionalProperties": False,
-                    },
+            messages = [
+                {"role": "user", "content": "Call the echo_probe tool with token pulse-test."}
+            ]
+            # Current Anthropic models reject forced tool_choice; ask for the call instead.
+            forced = None if self.protocol == "anthropic_messages" else {"name": "echo_probe"}
+            response = self.complete(messages, tools=[ECHO_TOOL], tool_choice=forced)
+            calls = response["tool_calls"]
+            if (
+                len(calls) != 1
+                or calls[0]["name"] != "echo_probe"
+                or calls[0]["arguments"] != {"token": "pulse-test"}
+            ):
+                raise ProviderError("INVALID_RESPONSE")
+            messages += [
+                {
+                    "role": "assistant",
+                    "content": response["content"],
+                    "tool_calls": [
+                        {
+                            "id": calls[0]["id"],
+                            "name": "echo_probe",
+                            "arguments": {"token": "pulse-test"},
+                        }
+                    ],
+                    "raw": response["raw"],
                 },
-            }
-            response = self.complete(
-                messages,
-                tools=[tool],
-                tool_choice={"type": "function", "function": {"name": "echo_probe"}},
-            )
-            try:
-                calls = response["tool_calls"]
-                call = calls[0]
-                if (
-                    len(calls) != 1
-                    or call["type"] != "function"
-                    or call["function"]["name"] != "echo_probe"
-                    or not isinstance(call["id"], str)
-                    or not 1 <= len(call["id"]) <= 200
-                    or json.loads(call["function"]["arguments"]) != {"token": "pulse-test"}
-                ):
-                    raise ValueError
-                # Only forward validated fields, never arbitrary provider metadata.
-                messages += [
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": call["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": "echo_probe",
-                                    "arguments": '{"token":"pulse-test"}',
-                                },
-                            }
-                        ],
-                    },
-                    {"role": "tool", "tool_call_id": call["id"], "content": '{"ok":true}'},
-                ]
-            except (ValueError, KeyError, IndexError, TypeError):
-                raise ProviderError("INVALID_RESPONSE") from None
-            text_content(self.complete(messages, tools=[tool], tool_choice="none"))
+                {
+                    "role": "tool",
+                    "tool_call_id": calls[0]["id"],
+                    "name": "echo_probe",
+                    "content": '{"ok":true}',
+                },
+            ]
+            text_of(self.complete(messages, tools=[ECHO_TOOL], tool_choice="none"))
 
         native_tools = run("tools", tools_probe)
         json_messages = [
@@ -186,19 +174,25 @@ class ProviderAdapter:
             }
         ]
 
-        def json_probe(native):
-            options = {"response_format": {"type": "json_object"}} if native else {}
+        def json_probe(output):
             try:
-                value = json.loads(text_content(self.complete(json_messages, **options)))
+                value = json.loads(text_of(self.complete(json_messages, output=output)))
                 if not isinstance(value, dict) or set(value) != {"ok"} or value["ok"] is not True:
                     raise ValueError
             except (ValueError, TypeError):
                 raise ProviderError("INVALID_RESPONSE") from None
 
-        native_json = run("json", lambda: json_probe(True))
-        text_json = native_json or run("text_json", lambda: json_probe(False))
+        native_json = False
+        if self.protocol != "anthropic_messages":
+            native_json = run("json", lambda: json_probe({"type": "json_object"}))
+        json_schema = run(
+            "json_schema",
+            lambda: json_probe({"type": "json_schema", "name": "probe", "schema": PROBE_SCHEMA}),
+        )
+        text_json = native_json or json_schema or run("text_json", lambda: json_probe(None))
         return {
             "usable": True,
+            "protocol": self.protocol,
             "strategy": "native_tools"
             if native_tools
             else "restricted_json"
@@ -206,6 +200,7 @@ class ProviderAdapter:
             else "narrative",
             "native_tools": native_tools,
             "native_json": native_json,
+            "json_schema": json_schema,
             "text_json": text_json,
             "stages": stages,
             "requests": self.requests,

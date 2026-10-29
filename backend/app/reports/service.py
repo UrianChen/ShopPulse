@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -22,16 +23,54 @@ from app.db.models import (
     ModelConfig,
     Report,
     ReportMessage,
+    ReportSchedule,
     ToolResult,
     now,
 )
 from app.jobs.queue import owned
+from app.observability.tracing import span, trace_id, traceparent
 from app.providers.credentials import decrypt
-from app.reports.evidence import render
-from app.reports.schema import BUDGETS, PROMPT_VERSION, RULE_VERSION
-from app.reports.tools import LABELS, LIMITATIONS, ToolRegistry, metric_facts, topic_facts
+from app.reports.drill import drill_payload, scoped_query
+from app.reports.evidence import render, validate_analysis, validate_answer
+from app.reports.followups import (
+    create_action_items,
+    followups_for,
+    notes_for,
+    record_evaluations,
+)
+from app.reports.grammar import EvidenceError
+from app.reports.schema import BUDGETS, GRAMMAR_VERSION, PROMPT_VERSION, RULE_VERSION
+from app.reports.tools import (
+    LABELS,
+    ToolError,
+    ToolRegistry,
+    limitations,
+    metric_facts,
+    topic_facts,
+)
 
 FINAL = {"ready", "ready_with_warnings", "failed"}
+CHILD_LIMIT = 16 * 1024 * 1024
+FALLBACK = {
+    "zh": {
+        "out_of_scope": "此问题需要其他范围的数据，请通过新建报告选择日期、版本或 SKU；"
+        "原报告保持不变。",
+        "missing_data": "当前未提供广告、流量或库存数据，无法判断投放效果、转化或补货数量。"
+        "请补充对应数据后验证。",
+        "default": "以下为原报告的可核验摘要；请结合退款原因、成本记录和商品明细继续核查。",
+        "recommendation": "先核对成本、退款及数据覆盖，再复盘主要商品的变化。",
+    },
+    "en": {
+        "out_of_scope": "This question needs data from another scope. Create a new report with "
+        "the dates, dataset or SKUs you need; the original report stays unchanged.",
+        "missing_data": "Advertising, traffic and inventory data are not provided, so campaign "
+        "effect, conversion and restocking cannot be assessed. Add that data to verify.",
+        "default": "Below is the verifiable summary of the original report; check refund "
+        "reasons, cost records and product details next.",
+        "recommendation": "Check costs, refunds and data coverage first, then review the main "
+        "product changes.",
+    },
+}
 
 
 def context_for(db, report):
@@ -63,6 +102,18 @@ def context_for(db, report):
             .limit(50)
         )
     ]
+    missing_cost = [
+        p.payload
+        for p in db.scalars(
+            select(MetricProduct)
+            .where(
+                MetricProduct.snapshot_id == snapshot.id,
+                MetricProduct.payload["current"]["quality"]["missing_cost_rows"].as_integer() > 0,
+            )
+            .order_by(MetricProduct.net_sales.desc().nulls_last(), MetricProduct.group_key)
+            .limit(20)
+        )
+    ]
 
     def count(*conditions):
         return db.scalar(
@@ -75,12 +126,46 @@ def context_for(db, report):
         "result": snapshot.result,
         "rankings": rankings,
         "rules": report.rules,
+        "language": report.language,
+        "missing_cost": missing_cost,
+        "followups": followups_for(db, report, snapshot.result),
+        "notes": notes_for(db, report, snapshot.result),
         "stats": {
             "active_skus": count(MetricProduct.paid_units > 0, MetricProduct.sku.is_not(None)),
             "negative_sales": count(MetricProduct.net_sales < 0),
             "unmapped": count(MetricProduct.sku.is_(None)),
         },
     }
+
+
+def report_evidence(db, report):
+    return [
+        r.payload
+        for r in db.scalars(
+            select(ToolResult)
+            .where(ToolResult.report_id == report.id)
+            .order_by(ToolResult.created_at, ToolResult.id)
+        )
+    ]
+
+
+def make_drill(dataset_id, snapshot, query):
+    """Recompute one SKU from frozen order lines in the worker process (never the model process)."""
+
+    def drill(sku):
+        from app.metrics.service import load_rows
+
+        scoped = scoped_query(query, sku)
+        with Session(db_module.engine()) as db:
+            dataset = db.get(DatasetVersion, uuid.UUID(dataset_id))
+            rows = load_rows(db, dataset, scoped, limit=settings().drill_row_limit)
+        if len(rows) > settings().drill_row_limit:
+            raise ToolError("ROWS_LIMIT")
+        if not rows:
+            raise ToolError("SKU_NOT_FOUND")
+        return drill_payload(sku, rows, snapshot, query)
+
+    return drill
 
 
 def persist_evidence(db, evidence):
@@ -101,18 +186,22 @@ def persist_evidence(db, evidence):
 def deterministic(report, dataset, context, registry):
     core = registry.core()
     result = context["result"]
-    facts = metric_facts(registry.evidence)
+    language = getattr(report, "language", None) or "zh"
+    facts = metric_facts(registry.evidence, language)
     summary = [
-        render(f, registry.evidence, result["currency"], result["currency_exponent"])
+        render(f, registry.evidence, result["currency"], result["currency_exponent"], language)
         for f in facts[:4]
     ]
+    followups = core.get("check_recommendation")
+    notes = core.get("get_merchant_notes")
     return {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "report_id": str(report.id),
         "revision": report.revision,
         "title": report.title,
+        "language": language,
         "generation_mode": "deterministic",
-        "template_version": "1.0",
+        "template_version": "2.0",
         "snapshot": {
             "dataset_id": str(dataset.id),
             "dataset_fingerprint": dataset.fingerprint,
@@ -126,6 +215,7 @@ def deterministic(report, dataset, context, registry):
             "rule_version": RULE_VERSION,
             "rules": report.rules,
             "prompt_version": PROMPT_VERSION,
+            "grammar_version": GRAMMAR_VERSION,
         },
         "metrics": result,
         "metric_cards": [
@@ -152,10 +242,21 @@ def deterministic(report, dataset, context, registry):
         "summary": summary,
         "products": core["rank_products"]["payload"]["items"],
         "anomalies": core["detect_anomalies"]["payload"],
+        "action_followups": [
+            {**item, "evidence_id": followups["evidence_id"]}
+            for item in followups["payload"]["items"]
+        ]
+        if followups
+        else [],
+        "merchant_notes": [
+            {**item, "evidence_id": notes["evidence_id"]} for item in notes["payload"]["items"]
+        ]
+        if notes
+        else [],
         "findings": [],
         "recommendations": [
             {
-                "action": "先核对成本、退款及数据覆盖，再复盘主要商品的变化。",
+                "action": FALLBACK[language]["recommendation"],
                 "priority": "medium",
                 "effort": "small",
                 "verification_metric": "net_sales",
@@ -163,13 +264,17 @@ def deterministic(report, dataset, context, registry):
                 "evidence_refs": [core["get_data_quality"]["evidence_id"]],
             }
         ],
-        "limitations": LIMITATIONS,
+        "limitations": limitations(language),
         "warnings": result["warnings"],
         "evidence_index": [
             {key: ev[key] for key in ("evidence_id", "tool", "result_hash", "run_id")}
             for ev in registry.evidence
         ],
     }
+
+
+def consent_fields(report):
+    return set(((report.model_snapshot or {}).get("consent") or {}).get("fields") or [])
 
 
 def model_request(db, report):
@@ -188,10 +293,24 @@ def model_request(db, report):
         key = decrypt(config)
     except Exception:
         return None, "CREDENTIAL_UNAVAILABLE"
-    return {"config": report.model_snapshot, "key": key}, None
+    snapshot = dict(report.model_snapshot)
+    snapshot.setdefault("protocol", "openai_chat")
+    return {"config": snapshot, "key": key}, None
 
 
-def model_process(request, timeout, cancelled=None):
+def _timeout_output(steps):
+    return {
+        "analysis": None,
+        "raw_analysis": None,
+        "error_code": "TIMEOUT",
+        "usage": {},
+        "steps": steps,
+        "extra_evidence": [],
+    }
+
+
+def model_process(request, timeout, cancelled=None, tools=None, on_event=None):
+    """Run the model subprocess and serve its tool requests over newline-delimited JSON."""
     env = os.environ.copy()
     env["MODEL_ALLOWED_ORIGINS"] = json.dumps(settings().model_allowed_origins)
     process = subprocess.Popen(
@@ -201,7 +320,21 @@ def model_process(request, timeout, cancelled=None):
         stderr=subprocess.DEVNULL,
         env=env,
     )
-    done, aborted = threading.Event(), threading.Event()
+    lines, done, aborted = queue.Queue(), threading.Event(), threading.Event()
+    deadline = time.monotonic() + max(1, timeout)
+    steps = []
+
+    def read():
+        try:
+            while True:
+                line = process.stdout.readline(CHILD_LIMIT + 1)
+                if not line or len(line) > CHILD_LIMIT:
+                    break
+                lines.put(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            lines.put(None)
 
     def watch():
         while not done.wait(1):
@@ -214,44 +347,109 @@ def model_process(request, timeout, cancelled=None):
                 process.kill()
                 return
 
+    def write(data):
+        # A writer thread bounds a blocked pipe write by the run deadline.
+        failure = []
+
+        def target():
+            try:
+                process.stdin.write(data)
+                process.stdin.flush()
+            except (OSError, ValueError) as error:
+                failure.append(error)
+
+        writer = threading.Thread(target=target, daemon=True)
+        writer.start()
+        writer.join(max(0.1, deadline - time.monotonic()))
+        if writer.is_alive() or (failure and aborted.is_set()):
+            raise subprocess.TimeoutExpired("runner", timeout)
+        if failure:
+            raise ValueError("RUNNER_PIPE")
+
+    def reply(message):
+        name, args = message.get("name"), message.get("args") or {}
+        try:
+            if tools is None:
+                raise ToolError("TOOL_UNAVAILABLE")
+            evidence = tools(name, args)
+            body = {
+                "type": "tool_result",
+                "id": message.get("id"),
+                "ok": True,
+                "evidence": evidence,
+            }
+        except ToolError as error:
+            body = {"type": "tool_result", "id": message.get("id"), "ok": False, "code": error.code}
+        except Exception:
+            body = {
+                "type": "tool_result",
+                "id": message.get("id"),
+                "ok": False,
+                "code": "TOOL_FAILED",
+            }
+        write((json.dumps(body, ensure_ascii=False) + "\n").encode("utf-8"))
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
     watcher = threading.Thread(target=watch, daemon=True) if cancelled else None
     if watcher:
         watcher.start()
     try:
-        # One communicate call must own the full pipe write. Short timeout retries with None
-        # can abandon a partially written stdin on POSIX, leaving the child waiting for EOF.
-        output, _ = process.communicate(
-            json.dumps(request, ensure_ascii=False).encode(), timeout=max(1, timeout)
-        )
-        if aborted.is_set():
-            raise subprocess.TimeoutExpired("cancelled", timeout)
-        if process.returncode != 0:
-            raise ValueError("RUNNER_FAILED")
-        return json.loads(output)
+        write((json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8"))
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired("runner", timeout)
+            try:
+                line = lines.get(timeout=min(remaining, 1))
+            except queue.Empty:
+                if aborted.is_set():
+                    raise subprocess.TimeoutExpired("cancelled", timeout) from None
+                continue
+            if line is None:
+                if aborted.is_set():
+                    raise subprocess.TimeoutExpired("cancelled", timeout)
+                raise ValueError("RUNNER_FAILED")
+            message = json.loads(line)
+            kind = message.get("type")
+            if kind == "event" and isinstance(message.get("step"), dict):
+                steps.append(message["step"])
+                if on_event:
+                    try:
+                        on_event(message["step"])
+                    except Exception:
+                        pass
+            elif kind == "tool":
+                reply(message)
+            elif kind == "final":
+                output = message.get("output") or {}
+                output["steps"] = steps
+                output.setdefault("extra_evidence", [])
+                output.setdefault("analysis", None)
+                return output
     except subprocess.TimeoutExpired:
-        process.kill()
-        process.communicate()
-        return {
-            "analysis": None,
-            "error_code": "TIMEOUT",
-            "usage": {},
-            "steps": [],
-            "extra_evidence": [],
-        }
-    except Exception:
-        process.kill()
-        process.communicate()
-        raise
+        return _timeout_output(steps)
     finally:
         done.set()
+        try:
+            process.stdin.close()
+        except (OSError, ValueError):
+            pass
+        if process.poll() is None:
+            process.kill()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        reader.join(timeout=2)
         if watcher:
             watcher.join(timeout=2)
 
 
 def question_intent(question, query):
     if re.search(
-        r"去年|明年|下周|下个月|上个月|last year|next week|another.*(?:period|dataset)|"
-        r"其他.*(?:日期|店铺|数据)|换.*(?:范围|版本)|全店",
+        r"去年|明年|下周|下个月|上个月|last year|next week|next month|last month|"
+        r"another.*(?:period|dataset)|其他.*(?:日期|店铺|数据)|换.*(?:范围|版本)|全店",
         question,
         re.I,
     ):
@@ -268,6 +466,34 @@ def question_intent(question, query):
     if re.search(r"商品|产品|SKU|product", question, re.I):
         return "product_review"
     return "business_review"
+
+
+def conversation_for(db, report, message_row, include_questions):
+    rows = db.scalars(
+        select(ReportMessage)
+        .where(
+            ReportMessage.report_id == report.id,
+            ReportMessage.sequence < message_row.sequence,
+            ReportMessage.status.in_(["ready", "ready_with_warnings"]),
+        )
+        .order_by(ReportMessage.sequence.desc())
+        .limit(3)
+    )
+    history = []
+    for row in reversed(list(rows)):
+        answer = row.answer or {}
+        entry = {"answer": [s["text"] for s in answer.get("summary") or []][:4]}
+        if include_questions:
+            entry["question"] = row.question
+        history.append(entry)
+    return history
+
+
+def append_step(run_id, step):
+    with Session(db_module.engine()) as db, db.begin():
+        run = db.get(AgentRun, run_id, with_for_update=True)
+        if run is not None and run.status in {"computing", "analyzing"}:
+            run.steps = [*run.steps, {k: v for k, v in step.items() if k != "debug"}]
 
 
 def execute(job):
@@ -320,17 +546,15 @@ def execute(job):
         db.add(run)
         db.flush()
         context = context_for(db, report)
-        registry = ToolRegistry(context, str(report.id), str(run.id))
+        existing = report_evidence(db, report)
+        registry = ToolRegistry(
+            context,
+            str(report.id),
+            str(run.id),
+            cache={(e["tool"], e["args_hash"]): e for e in existing},
+        )
         if message_row or report.content:
-            evidence_ids = [uuid.UUID(e["evidence_id"]) for e in report.content["evidence_index"]]
-            registry.evidence = [
-                ev.payload
-                for ev in db.scalars(
-                    select(ToolResult).where(
-                        ToolResult.report_id == report.id, ToolResult.id.in_(evidence_ids)
-                    )
-                )
-            ]
+            registry.evidence = existing
             intent = (
                 question_intent(message_row.question, report.query)
                 if message_row
@@ -345,55 +569,145 @@ def execute(job):
             persist_evidence(db, registry.evidence)
             report.status = "analyzing"
             intent = "business_review"
+        core_count = len(registry.evidence)
         credential, reason = model_request(db, report)
+        fields = consent_fields(report)
         if reserved:
             credential, reason = None, "MODEL_RETRY_SUPPRESSED"
-        if intent in {"out_of_scope", "missing_data"}:
+        if intent == "missing_data" or (intent == "out_of_scope" and "question_text" not in fields):
             credential, reason = None, intent.upper()
         run.status = "analyzing" if credential else "computing"
-        run.usage = {"tools": registry.calls, "requests_reserved": 4 if credential else 0}
-        run.steps = [
-            {
-                "phase": "computing",
-                "tools": registry.calls,
-                "evidence_count": len(registry.evidence),
-            },
-            {"phase": run.status},
+        run.usage = {
+            "tools": 0,
+            "core_tools": core_count,
+            "requests_reserved": BUDGETS["requests"] if credential else 0,
+        }
+        base_steps = [
+            {"phase": "computing", "tools": core_count, "evidence_count": len(registry.evidence)},
+            {"phase": run.status, "intent": intent},
         ]
+        run.steps = base_steps
+        result = context["result"]
+        dataset = db.get(DatasetVersion, report.dataset_id)
         request = {
             "report_id": str(report.id),
             "run_id": str(run.id),
-            "context": context,
             "evidence": registry.evidence,
             "kind": "question" if message_row else "report",
             "intent": intent,
+            "language": report.language or "zh",
+            "dataset_id": result["dataset_id"],
+            "currency": result["currency"],
+            "currency_exponent": result["currency_exponent"],
+            "scope": result["query"],
+            "prompt_version": PROMPT_VERSION,
+            "debug_capture": settings().agent_debug_capture,
         }
+        if message_row:
+            request["question"] = message_row.question if "question_text" in fields else None
+            request["conversation"] = conversation_for(
+                db, report, message_row, "question_text" in fields
+            )
+        drill = make_drill(str(dataset.id), dataset.snapshot, result["query"])
         run_id = run.id
+        include_names = (report.model_snapshot or {}).get("product_name_mode") == "include_names"
     output = {
         "analysis": None,
         "error_code": reason,
-        "usage": {"tools": registry.calls, "requests": 0},
+        "usage": {"tools": 0, "requests": 0},
         "steps": [],
         "extra_evidence": [],
     }
+    trace = None
     if credential:
+        registry.drill = drill
 
         def cancelled():
             with Session(db_module.engine()) as db:
                 return not db.scalar(select(Job.id).where(*owned(job)))
 
-        try:
-            output = model_process(
-                {**request, **credential}, 175 - (time.monotonic() - started), cancelled
-            )
-        except Exception:
-            output["error_code"] = "MODEL_EXECUTION_FAILED"
-        finally:
-            credential = None
-    commit(job, run_id, output, intent)
+        with span(
+            "agent.run",
+            {
+                "shoppulse.report_id": request["report_id"],
+                "shoppulse.run_id": request["run_id"],
+                "shoppulse.kind": request["kind"],
+                "shoppulse.intent": intent,
+                "shoppulse.prompt_version": PROMPT_VERSION,
+                "gen_ai.request.model": (credential.get("config") or {}).get("model_name", ""),
+            },
+        ) as root:
+            trace = trace_id(root)
+            request["traceparent"] = traceparent()
+            try:
+                output = model_process(
+                    {**request, **credential},
+                    BUDGETS["seconds"] - 5 - (time.monotonic() - started),
+                    cancelled,
+                    tools=registry.execute,
+                    on_event=lambda step: append_step(run_id, step),
+                )
+            except Exception:
+                output["error_code"] = "MODEL_EXECUTION_FAILED"
+            finally:
+                credential = None
+        # Defense in depth: re-validate the child's raw output against the parent's evidence.
+        raw, output["analysis"] = output.get("raw_analysis"), None
+        if raw is not None and not output.get("error_code"):
+            validator = validate_answer if message_row else validate_analysis
+            try:
+                output["analysis"] = validator(
+                    raw,
+                    registry.evidence,
+                    request["report_id"],
+                    request["dataset_id"],
+                    request["currency"],
+                    request["currency_exponent"],
+                    request["scope"],
+                    request["language"],
+                    include_names,
+                )
+            except (EvidenceError, ValueError, TypeError, KeyError):
+                output["error_code"] = "PARENT_VALIDATION_FAILED"
+        output["extra_evidence"] = registry.evidence[core_count:]
+        output.setdefault("usage", {})["tools"] = registry.calls
+    commit(job, run_id, output, intent, base_steps, trace)
 
 
-def commit(job, run_id, output, intent):
+def answer_for(report, intent, output, evidence):
+    language = report.language or "zh"
+    analysis = output["analysis"]
+    if analysis:
+        text = analysis["clarify"]["text"] if analysis["clarify"] else None
+        return {
+            "kind": analysis["kind"],
+            "message": text,
+            "analysis": {
+                "findings": analysis["findings"],
+                "recommendations": analysis["recommendations"],
+            },
+            "summary": analysis["answer"],
+            "options": analysis["options"],
+            "suggested_query": analysis["suggested_query"],
+            "new_analysis_required": analysis["kind"] == "suggested_query",
+        }
+    result = report.content["metrics"]
+    fallback = [
+        render(fact, evidence, result["currency"], result["currency_exponent"], language)
+        for fact in topic_facts(evidence, intent, language)
+    ]
+    return {
+        "kind": "fallback",
+        "message": FALLBACK[language].get(intent, FALLBACK[language]["default"]),
+        "analysis": None,
+        "summary": fallback,
+        "options": [],
+        "suggested_query": None,
+        "new_analysis_required": intent == "out_of_scope",
+    }
+
+
+def commit(job, run_id, output, intent, base_steps=None, trace=None):
     with Session(db_module.engine()) as db, db.begin():
         current = db.scalar(select(Job).where(*owned(job)).with_for_update())
         if not current:
@@ -407,44 +721,32 @@ def commit(job, run_id, output, intent):
             else "deterministic"
         )
         persist_evidence(db, output["extra_evidence"])
+        steps = output.get("steps") or []
+        debug = [
+            {"t_ms": s.get("t_ms"), "request": s.get("request"), **s["debug"]}
+            for s in steps
+            if isinstance(s.get("debug"), dict)
+        ][:16]
+        steps = [{k: v for k, v in s.items() if k != "debug"} for s in steps]
+        new_index = [
+            {k: e[k] for k in ("evidence_id", "tool", "result_hash", "run_id")}
+            for e in output["extra_evidence"]
+        ]
         if job.type == "report_question":
             msg = db.get(ReportMessage, uuid.UUID(job.payload["message_id"]))
-            evidence = list(db.scalars(select(ToolResult).where(ToolResult.report_id == report.id)))
-            fallback_summary = [
-                render(
-                    fact,
-                    [ev.payload for ev in evidence],
-                    report.content["metrics"]["currency"],
-                    report.content["metrics"]["currency_exponent"],
-                )
-                for fact in topic_facts([ev.payload for ev in evidence], intent)
+            evidence = [
+                ev.payload
+                for ev in db.scalars(select(ToolResult).where(ToolResult.report_id == report.id))
             ]
-            text = (
-                "此问题需要其他范围的数据，请通过新建报告选择日期、版本或 SKU；原报告保持不变。"
-                if intent == "out_of_scope"
-                else (
-                    "当前未提供广告、流量或库存数据，无法判断投放效果、转化或补货数量。"
-                    "请补充对应数据后验证。"
-                )
-                if intent == "missing_data"
-                else "以下为原报告的可核验摘要；请结合退款原因、成本记录和商品明细继续核查。"
-            )
+            known = {e["evidence_id"] for e in evidence}
+            evidence += [e for e in output["extra_evidence"] if e["evidence_id"] not in known]
             msg.answer = {
                 "generation_mode": mode,
-                "message": text,
-                "analysis": output["analysis"],
-                "summary": fallback_summary
-                if not output["analysis"]
-                else output["analysis"]["summary"],
-                "limitations": LIMITATIONS,
+                **answer_for(report, intent, output, evidence),
+                "limitations": limitations(report.language or "zh"),
                 "error_code": error,
-                "new_analysis_required": intent == "out_of_scope",
                 "run_id": str(run_id),
-                "evidence_index": report.content["evidence_index"]
-                + [
-                    {k: e[k] for k in ("evidence_id", "tool", "result_hash", "run_id")}
-                    for e in output["extra_evidence"]
-                ],
+                "evidence_index": report.content["evidence_index"] + new_index,
             }
             msg.status = (
                 "ready"
@@ -457,10 +759,7 @@ def commit(job, run_id, output, intent):
             content["model_error_code"] = error
             if output["analysis"]:
                 content.update(output["analysis"])
-            content["evidence_index"] += [
-                {k: e[k] for k in ("evidence_id", "tool", "result_hash", "run_id")}
-                for e in output["extra_evidence"]
-            ]
+            content["evidence_index"] = content["evidence_index"] + new_index
             content["run_id"] = str(run_id)
             report.content = content
             report.status = (
@@ -468,11 +767,16 @@ def commit(job, run_id, output, intent):
                 if (error and error != "NO_MODEL") or content["warnings"]
                 else "ready"
             )
+            create_action_items(db, report, content["recommendations"])
+            record_evaluations(db, content.get("action_followups") or [], report.id)
+            notify(db, report)
         run.status, run.completed_at, run.error_code = "completed", now(), error
-        run.usage = {**run.usage, **output["usage"]}
+        run.usage = {**run.usage, **output.get("usage", {})}
+        run.trace_id = trace
+        run.debug = debug or None
         run.steps = (
-            run.steps
-            + output["steps"]
+            (base_steps or run.steps[:2])
+            + steps
             + [
                 {"phase": "validating", "repaired": output.get("repaired", False)},
                 {"phase": "completed", "generation_mode": mode},
@@ -486,6 +790,22 @@ def commit(job, run_id, output, intent):
         }
         current.updated_at = now()
         return True
+
+
+def notify(db, report):
+    if not report.schedule_id:
+        return
+    schedule = db.get(ReportSchedule, report.schedule_id)
+    if schedule is None or not schedule.webhook_ciphertext:
+        return
+    from app.ingestion.service import schedule as enqueue
+
+    enqueue(
+        db,
+        report.workspace_id,
+        "notify_webhook",
+        {"report_id": str(report.id), "schedule_id": str(schedule.id)},
+    )
 
 
 def fail(db, job, code):

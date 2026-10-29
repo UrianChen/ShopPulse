@@ -1,10 +1,11 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -219,6 +220,9 @@ class ModelConfig(Base):
     name: Mapped[str] = mapped_column(String(100))
     base_url: Mapped[str] = mapped_column(String(500))
     model_name: Mapped[str] = mapped_column(String(200))
+    protocol: Mapped[str] = mapped_column(
+        String(30), default="openai_chat", server_default="openai_chat"
+    )
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=45)
     token_limit_parameter: Mapped[str] = mapped_column(String(30), default="none")
     revision: Mapped[int] = mapped_column(Integer, default=1)
@@ -252,6 +256,10 @@ class Report(Base):
     status: Mapped[str] = mapped_column(String(30), default="queued")
     job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"))
     content: Mapped[dict | None] = mapped_column(JSON)
+    language: Mapped[str] = mapped_column(String(5), default="zh", server_default="zh")
+    schedule_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("report_schedules.id"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -268,12 +276,15 @@ class AgentRun(Base):
     steps: Mapped[list] = mapped_column(JSON, default=list)
     usage: Mapped[dict] = mapped_column(JSON, default=dict)
     error_code: Mapped[str | None] = mapped_column(String(64))
+    trace_id: Mapped[str | None] = mapped_column(String(32))
+    debug: Mapped[list | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ToolResult(Base):
     __tablename__ = "tool_results"
+    __table_args__ = (Index("ix_tool_results_cache", "report_id", "tool", "args_hash"),)
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     report_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("reports.id"), index=True)
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agent_runs.id"), index=True)
@@ -328,3 +339,66 @@ class WorkerPulse(Base):
     heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     job_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     rss_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
+class ActionItem(Base):
+    """A recommendation the merchant can track; evaluated against later reports."""
+
+    __tablename__ = "action_items"
+    __table_args__ = (UniqueConstraint("report_id", "position"),)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    report_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("reports.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(String(500))
+    verification_metric: Mapped[str] = mapped_column(String(40))
+    review_window: Mapped[str] = mapped_column(String(20))
+    priority: Mapped[str] = mapped_column(String(10))
+    effort: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    note: Mapped[str | None] = mapped_column(String(500))
+    evaluation: Mapped[dict | None] = mapped_column(JSON)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class MerchantNote(Base):
+    """Merchant-authored context (promotions, holidays...) that analysis may cite as data."""
+
+    __tablename__ = "merchant_notes"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    start_date: Mapped[date] = mapped_column(Date)
+    end_exclusive: Mapped[date] = mapped_column(Date)
+    kind: Mapped[str] = mapped_column(String(20))
+    text: Mapped[str] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ReportSchedule(Base):
+    __tablename__ = "report_schedules"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    title: Mapped[str] = mapped_column(String(150))
+    dataset_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("dataset_versions.id"))
+    model_config_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("model_configs.id"))
+    period_days: Mapped[int] = mapped_column(Integer, default=7)
+    weekday: Mapped[int] = mapped_column(Integer, default=0)
+    hour: Mapped[int] = mapped_column(Integer, default=8)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    rules: Mapped[dict] = mapped_column(JSON)
+    language: Mapped[str] = mapped_column(String(5), default="zh")
+    webhook_ciphertext: Mapped[str | None] = mapped_column(Text)
+    webhook_key_version: Mapped[int | None] = mapped_column(Integer)
+    webhook_format: Mapped[str] = mapped_column(String(20), default="generic")
+    series_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    last_report_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_status: Mapped[str | None] = mapped_column(String(40))
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

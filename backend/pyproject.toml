@@ -1,6 +1,6 @@
 [project]
 name = "shoppulse-backend"
-version = "1.0.0"
+version = "2.0.0"
 description = "ShopPulse API and durable worker"
 license = "MIT"
 requires-python = ">=3.12,<3.13"
@@ -19,6 +19,8 @@ dependencies = [
   "cryptography>=50.0.2,<51",
   "playwright>=1.56,<2",
   "fonttools>=4.60,<5",
+  "opentelemetry-sdk>=1.30,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.30,<2",
 ]
 
 [dependency-groups]

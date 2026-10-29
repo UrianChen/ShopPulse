@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 
 from app import __version__
+from app.api.automation import router as automation_router
 from app.api.exports import router as exports_router
 from app.api.imports import router as import_router
 from app.api.metrics import router as metrics_router
@@ -38,6 +39,7 @@ app.include_router(model_router)
 app.include_router(reports_router)
 app.include_router(exports_router)
 app.include_router(operations_router)
+app.include_router(automation_router)
 app.add_middleware(UploadLimitMiddleware)
 
 

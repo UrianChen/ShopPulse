@@ -293,7 +293,7 @@ def test_stale_worker_cannot_commit(api_client, db, monkeypatch):
 def test_unsupported_and_invalid_json_are_not_capabilities():
     sent = []
 
-    def transport(url, key, payload, timeout):
+    def transport(url, key, payload, timeout, protocol="openai_chat"):
         sent.append(payload)
         return (
             completion('{"ok":1}') if "JSON" in payload["messages"][-1]["content"] else completion()
@@ -407,3 +407,24 @@ def test_process_deadline_kills_and_reaps(monkeypatch):
     with pytest.raises(ProviderError, match="TIMEOUT"):
         service.probe({}, KEY)
     assert stopped == [True]
+
+
+def test_v1_consent_is_flagged_and_confirmed_without_new_revision(api_client, db):
+    item = create(api_client)
+    path = "/api/v1/model-configs/" + item["id"]
+    assert item["consent_current"] and "question_text" in item["consent"]["fields"]
+    row = db.get(ModelConfig, uuid.UUID(item["id"]))
+    row.consent = {**row.consent, "version": "1.0", "fields": ["aggregate_metrics", "sku"]}
+    row.capabilities = {"usable": True, "strategy": "native_tools"}
+    db.commit()
+    assert not api_client.get(path).json()["data"]["consent_current"]
+    foreign = api_client.post(path + "/consent", headers={"Origin": "https://evil.example"})
+    assert foreign.status_code == 403
+    confirmed = api_client.post(path + "/consent")
+    assert confirmed.status_code == 200, confirmed.text
+    data = confirmed.json()["data"]
+    assert data["consent_current"] and data["revision"] == item["revision"]
+    assert {"question_text", "merchant_notes"} <= set(data["consent"]["fields"])
+    assert data["consent"]["revision"] == data["revision"]
+    assert data["capabilities"] == {"usable": True, "strategy": "native_tools"}
+    assert KEY not in confirmed.text

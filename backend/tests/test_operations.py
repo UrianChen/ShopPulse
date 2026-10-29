@@ -28,11 +28,13 @@ from tests.test_metrics import prepare_dataset
 from tests.test_reports import context, create_report, finish_report
 
 
-def sample():
+def sample(language="zh"):
     ctx = context()
+    ctx["language"] = language
     registry = ToolRegistry(ctx, str(uuid.uuid4()), str(uuid.uuid4()))
     report = SimpleNamespace(
         id=registry.report_id,
+        language=language,
         revision=1,
         title="安全验收 <script>alert(1)</script>",
         model_snapshot=None,
@@ -281,7 +283,7 @@ def test_cancel_during_model_call_keeps_core_and_rejects_late_output_A16(
     job = claim()
     monkeypatch.setattr(service, "model_request", lambda *args: ({"key": "synthetic"}, None))
 
-    def in_flight(request, timeout, cancelled):
+    def in_flight(request, timeout, cancelled, **kwargs):
         assert not cancelled()
         response = api_client.post(f"/api/v1/operations/jobs/{job.id}/cancel")
         assert response.status_code == 200
@@ -302,3 +304,40 @@ def test_cancel_during_model_call_keeps_core_and_rejects_late_output_A16(
     assert report["content"]["model_error_code"] == "CANCELLED"
     assert report["content"]["metrics"]["current"]["metrics"]["net_sales"]["value"] == "55000"
     assert db.scalar(select(AgentRun).where(AgentRun.job_id == job.id)).error_code == "CANCELLED"
+
+
+def test_offline_render_follows_report_language():
+    content, evidence = sample("en")
+    html = html_document(content, evidence)
+    assert '<html lang="en">' in html and "<title>ShopPulse report</title>" in html
+    for text in (
+        "Overview",
+        "Trend and sales contribution",
+        "Products (top ten by net sales)",
+        "Anomalies and limitations",
+        "Net sales swing",
+        "Heuristic swing alert",
+        "Net sales in the current period: CNY 550.00.",
+        "Evidence appendix",
+    ):
+        assert text in html, text
+    for text in (
+        "经营概览",
+        "证据附录",
+        "异常与限制",
+        "冻结经营报告",
+        "启发式",
+        "未选择",
+        "实际值",
+    ):
+        assert text not in html, text
+    with zipfile.ZipFile(io.BytesIO(markdown_zip(content, evidence))) as archive:
+        report = archive.read("report.md").decode()
+        trend = archive.read("trend.svg").decode()
+    assert "## Overview" in report and "## Evidence appendix" in report
+    assert "Priority Medium · Effort Small · Verification metric Net sales" in report.replace(
+        "\\", ""
+    )
+    assert "经营概览" not in report and "Net sales trend" in trend
+    chinese = html_document(*sample())
+    assert '<html lang="zh-CN">' in chinese and "经营概览" in chinese and "Overview" not in chinese

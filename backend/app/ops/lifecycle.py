@@ -6,6 +6,7 @@ from sqlalchemy import delete, select, text, update
 from app.api.imports import scoped
 from app.core.errors import AppError
 from app.db.models import (
+    ActionItem,
     AgentRun,
     CostRow,
     CostVersion,
@@ -18,6 +19,7 @@ from app.db.models import (
     OrderLine,
     Report,
     ReportMessage,
+    ReportSchedule,
     ToolResult,
     Upload,
     ValidationIssue,
@@ -108,6 +110,17 @@ def remove(db, plan):
     db.execute(delete(ToolResult).where(ToolResult.report_id.in_(ids["reports"])))
     db.execute(delete(AgentRun).where(AgentRun.report_id.in_(ids["reports"])))
     db.execute(delete(ReportMessage).where(ReportMessage.report_id.in_(ids["reports"])))
+    db.execute(delete(ActionItem).where(ActionItem.report_id.in_(ids["reports"])))
+    db.execute(
+        update(ReportSchedule)
+        .where(ReportSchedule.last_report_id.in_(ids["reports"]))
+        .values(last_report_id=None)
+    )
+    db.execute(
+        update(ReportSchedule)
+        .where(ReportSchedule.dataset_id.in_(ids["datasets"]))
+        .values(dataset_id=None, enabled=False, next_run_at=None, last_status="DATASET_DELETED")
+    )
     db.execute(update(Report).where(Report.parent_id.in_(ids["reports"])).values(parent_id=None))
     db.execute(delete(Report).where(Report.id.in_(ids["reports"])))
     db.execute(delete(MetricProduct).where(MetricProduct.snapshot_id.in_(ids["snapshots"])))

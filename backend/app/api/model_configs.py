@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import WorkspaceContext, current_workspace, envelope, mutation_workspace
 from app.api.imports import scoped
 from app.core.errors import AppError
-from app.db.models import Job, ModelConfig, Report, ReportMessage, now
+from app.db.models import Job, ModelConfig, Report, ReportMessage, ReportSchedule, now
 from app.db.session import db_session
 from app.ingestion.service import schedule
 from app.ops.audit import audit
@@ -26,7 +26,8 @@ class ModelInput(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     base_url: str = Field(min_length=1, max_length=500)
     model_name: str = Field(min_length=1, max_length=200)
-    timeout_seconds: int = Field(default=45, ge=5, le=60)
+    protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"] = "openai_chat"
+    timeout_seconds: int = Field(default=45, ge=5, le=300)
     token_limit_parameter: Literal["none", "max_tokens", "max_completion_tokens"] = "none"
     product_name_mode: Literal["sku_only", "include_names"] = "sku_only"
     is_default: bool = False
@@ -58,12 +59,14 @@ def public(item, db):
         "name": item.name,
         "base_url": item.base_url,
         "model_name": item.model_name,
+        "protocol": item.protocol,
         "revision": item.revision,
         "is_default": item.is_default,
         "timeout_seconds": item.timeout_seconds,
         "token_limit_parameter": item.token_limit_parameter,
         "product_name_mode": item.product_name_mode,
         "consent": item.consent,
+        "consent_current": consent_current(item),
         "has_api_key": bool(item.credential_ciphertext),
         "capabilities": item.capabilities,
         "tested_at": item.tested_at,
@@ -82,7 +85,8 @@ class ModelPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
     model_name: str | None = Field(default=None, min_length=1, max_length=200)
-    timeout_seconds: int | None = Field(default=None, ge=5, le=60)
+    protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"] | None = None
+    timeout_seconds: int | None = Field(default=None, ge=5, le=300)
     token_limit_parameter: Literal["none", "max_tokens", "max_completion_tokens"] | None = None
     product_name_mode: Literal["sku_only", "include_names"] | None = None
     is_default: bool | None = None
@@ -111,6 +115,32 @@ def ensure_idle(item, db):
         raise AppError(409, "MODEL_BUSY", "连接测试正在执行，结束后再修改或删除。")
 
 
+CONSENT_VERSION = "2.0"
+# v2: follow-up questions, short answer history and merchant notes are sent as data.
+CONSENT_FIELDS = ["aggregate_metrics", "quality_summary", "sku", "question_text", "merchant_notes"]
+
+
+def consent_for(item, url, product_name_mode, actor):
+    return {
+        "version": CONSENT_VERSION,
+        "target_origin": f"{urlsplit(url).scheme}://{urlsplit(url).netloc}",
+        "fields": CONSENT_FIELDS
+        + (["product_name"] if product_name_mode == "include_names" else []),
+        "product_name_mode": product_name_mode,
+        "revision": item.revision,
+        "confirmed_at": now().isoformat(),
+        "confirmed_workspace": str(actor.workspace_id),
+    }
+
+
+def consent_current(item):
+    """False for configurations confirmed under the 1.x data scope."""
+    consent = item.consent or {}
+    return consent.get("version") == CONSENT_VERSION and set(CONSENT_FIELDS) <= set(
+        consent.get("fields") or []
+    )
+
+
 def apply(item, payload, db, actor):
     try:
         url = normalize_url(payload.base_url)
@@ -125,6 +155,7 @@ def apply(item, payload, db, actor):
     for field in (
         "name",
         "model_name",
+        "protocol",
         "timeout_seconds",
         "token_limit_parameter",
         "product_name_mode",
@@ -133,16 +164,7 @@ def apply(item, payload, db, actor):
         setattr(item, field, getattr(payload, field))
     item.base_url = url
     item.updated_at = now()
-    item.consent = {
-        "version": "1.0",
-        "target_origin": f"{urlsplit(url).scheme}://{urlsplit(url).netloc}",
-        "fields": ["aggregate_metrics", "quality_summary", "sku"]
-        + (["product_name"] if payload.product_name_mode == "include_names" else []),
-        "product_name_mode": payload.product_name_mode,
-        "revision": item.revision,
-        "confirmed_at": now().isoformat(),
-        "confirmed_workspace": str(actor.workspace_id),
-    }
+    item.consent = consent_for(item, url, payload.product_name_mode, actor)
     if payload.api_key is not None:
         encrypt(item, payload.api_key.get_secret_value())
     elif payload.clear_api_key:
@@ -205,6 +227,7 @@ def patch(
             "name",
             "base_url",
             "model_name",
+            "protocol",
             "timeout_seconds",
             "token_limit_parameter",
             "product_name_mode",
@@ -251,9 +274,41 @@ def remove(
         raise AppError(
             409, "MODEL_REFERENCED", "此模型已被历史报告引用，不能删除；可编辑配置或清除密钥。"
         )
+    if db.scalar(
+        select(ReportSchedule.id).where(ReportSchedule.model_config_id == item.id).limit(1)
+    ):
+        raise AppError(409, "MODEL_REFERENCED", "此模型已被定时周报使用，请先修改或删除定时任务。")
     audit(db, actor, "model.deleted", item.id)
     db.delete(item)
     db.commit()
+
+
+@router.post("/{config_id}/consent")
+def confirm_consent(
+    config_id: uuid.UUID,
+    request: Request,
+    actor: WorkspaceContext = Depends(mutation_workspace),
+    db: Session = Depends(db_session),
+):
+    """Re-confirm the current data scope without changing the endpoint, key or test results.
+
+    The revision is kept, so reports already using this configuration keep working; each report
+    still uses the consent frozen in its own snapshot, and new reports use the confirmed scope.
+    """
+    lock_configs(db)
+    item = scoped(db, ModelConfig, config_id, actor, lock=True)
+    ensure_idle(item, db)
+    item.consent = consent_for(item, item.base_url, item.product_name_mode, actor)
+    item.updated_at = now()
+    audit(
+        db,
+        actor,
+        "model.consent_confirmed",
+        item.id,
+        {"revision": item.revision, "version": CONSENT_VERSION},
+    )
+    db.commit()
+    return envelope(request, public(item, db))
 
 
 @router.post("/{config_id}/test", status_code=202)

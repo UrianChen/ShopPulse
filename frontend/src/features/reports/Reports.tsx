@@ -1,4 +1,4 @@
-import { t, useLanguage, locale, message } from '../../lib/i18n';
+import { t, useLanguage, locale, message, getLanguage } from '../../lib/i18n';
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -13,33 +13,88 @@ import '../imports/imports.css';
 import './reports.css';
 import { Exports } from './Exports';
 import '../operations.css';
+import { ActionRow, followupStates, noteKinds } from '../automation/Automation';
+import type { ActionItem } from '../automation/Automation';
+import '../automation/automation.css';
 
 type Sentence = { text: string; evidence_refs: string[] };
 type Evidence = { evidence_id: string; tool: string; result_hash: string; run_id: string };
-type Finding = { id: string; title: string; observation: Sentence; hypotheses: string[]; limitations: string[]; evidence_refs: string[] };
+type Finding = { id: string; title: string; observation: Sentence; supporting?: Sentence[]; hypotheses: string[]; limitations: string[]; evidence_refs: string[] };
 type Recommendation = { action: string; priority: string; effort: string; verification_metric: string; suggested_review_window: string; evidence_refs?: string[]; rationale_finding_ids?: string[] };
 type Content = { generation_mode: string; model_error_code?: string; summary: Sentence[]; metrics: Result;
   metric_cards: { key: string; label: string; metric: Metric; evidence_id: string }[]; snapshot: Record<string, unknown>;
   products: { sku: string | null; product_name: string; current: { metrics: Record<string, Metric> } }[];
   anomalies: { findings: { code: string; values: unknown; limitation: string }[]; checks: { code: string; state: string; limitation: string }[] };
-  findings: Finding[]; recommendations: Recommendation[]; limitations: string[]; warnings: string[]; evidence_index: Evidence[] };
-type Report = { id: string; title: string; status: string; revision: number; series_id: string; parent_id: string | null;
+  findings: Finding[]; recommendations: Recommendation[]; limitations: string[]; warnings: string[]; evidence_index: Evidence[];
+  language?: string; action_followups?: Followup[]; merchant_notes?: { id: string; start: string; end_exclusive: string; kind: string; text: string }[] };
+type Followup = { action_id: string; action_text: string; verification_metric: string; state: string; reason: string | null;
+  baseline: Metric | null; current: Metric | null; change_rate: string | null; source_period: [string, string] };
+type Report = { id: string; title: string; status: string; revision: number; series_id: string; parent_id: string | null; language?: string;
   dataset_id: string; model_config_id: string | null; generation_mode: string | null; created_at: string; error_code: string | null;
   query: Result['query']; rules: Record<string, number>; content: Content | null };
 type Version = { id: string; name: string; snapshot: { config: { options: { coverage_start: string; coverage_end_exclusive: string } } } };
-type Model = { id: string; name: string; is_default: boolean; capabilities: { usable: boolean } | null };
-type Message = { id: string; sequence: number; question: string; status: string; answer: { generation_mode: string; message: string; summary: Sentence[];
+type Model = { id: string; name: string; is_default: boolean; capabilities: { usable: boolean } | null; consent_current?: boolean };
+type Message = { id: string; sequence: number; question: string; status: string; answer: { generation_mode: string; kind?: string; message: string | null; summary: Sentence[]; options?: string[];
+  suggested_query?: { start: string; end_exclusive: string; comparison: string; skus: string[] } | null;
   analysis: { findings: Finding[]; recommendations: Recommendation[] } | null; limitations: string[]; error_code: string | null; new_analysis_required: boolean; evidence_index: Evidence[] } | null };
 const done = ['ready', 'ready_with_warnings', 'failed'];
 const modes: Record<string, string> = { deterministic: '确定性摘要', native_tools: '模型辅助 · 原生工具', restricted_json: '模型辅助 · 受限 JSON', narrative: '模型辅助 · 固定分析流程' };
 const states: Record<string, string> = { queued: '等待执行', computing: '计算指标', analyzing: '分析与校验中', ready: '已完成', ready_with_warnings: '已完成 · 请查看限制', failed: '执行失败', running: '正在回答' };
 const ruleNames: Record<string, string> = { SALES_CHANGE: '净销售额波动', HIGH_REFUND: '退款占比偏高', MARGIN_DROP: '毛利率下降', NEGATIVE_PROFIT: '负毛利商品', CONCENTRATION: '销售集中', DAILY_MAD: '日销售离群' };
-const toolNames: Record<string, string> = { get_data_quality: '数据质量检查', calculate_metrics: '经营指标计算', get_sales_trend: '销售趋势', rank_products: '商品排行', compare_periods: '周期比较', decompose_sales_change: '销售贡献分解', detect_anomalies: '确定性异常检测' };
+const toolNames: Record<string, string> = { get_data_quality: '数据质量检查', calculate_metrics: '经营指标计算', get_sales_trend: '销售趋势', rank_products: '商品排行', compare_periods: '周期比较', decompose_sales_change: '销售贡献分解', detect_anomalies: '确定性异常检测', inspect_sku: 'SKU 下钻', refund_breakdown: '退款拆解', cost_coverage: '成本覆盖检查', explain_metric: '指标口径说明' };
 const metricNames: Record<string, string> = { net_sales: '净销售额', gross_profit: '商品毛利', refund_amount_rate: '累计退款占比', paid_orders: '支付订单量' };
 const qualityNames: Record<string, string> = { SMALL_SAMPLE: '本期少于二十单，变化仅供观察', INCOMPLETE_COVERAGE: '本期数据覆盖不完整', COMPARISON_INCOMPLETE: '比较期数据覆盖不完整', COST_MISSING: '部分商品缺少成本，整体毛利不可用', RESTOCK_ESTIMATED: '退款回库未知，毛利为估算', REFUND_UNKNOWN: '累计退款未知，净值不可用', REFUND_ALLOCATED: '退款经过分摊，相关商品净值为估算' };
 function day(value: string, offset: number) { const date = new Date(value.slice(0, 10) + 'T12:00:00Z'); date.setUTCDate(date.getUTCDate() + offset); return date.toISOString().slice(0, 10); }
 function ErrorBox({ error }: { error: Error | null }) {
   useLanguage(); return error && <div className="error-notice" role="alert">{message(error.message)}</div>; }
+
+type Step = { phase: string; tool?: string; ok?: boolean; code?: string | null; error?: string | null; reason?: string; codes?: string[]; latency_ms?: number; input_tokens?: number; output_tokens?: number; tool_calls?: string[] };
+const phaseNames: Record<string, string> = { computing: '计算核心指标', analyzing: '模型分析', plan: '开始规划', model: '模型请求', tool: '工具调用', repair: '校验未通过，要求修复', finalize: '结束工具调用', compact: '压缩上下文', validated: '证据校验通过', validating: '最终校验', completed: '完成' };
+const finalizeReasons: Record<string, string> = { no_new_evidence: '没有新证据', round_limit: '达到轮次上限', budget: '接近预算上限' };
+function stepText(s: Step) {
+  const parts = [t(phaseNames[s.phase] ?? s.phase)];
+  if (s.tool) parts.push(toolNames[s.tool] ? `${t(toolNames[s.tool])} (${s.tool})` : s.tool);
+  if (s.code) parts.push(s.code);
+  if (s.error) parts.push(s.error);
+  if (s.reason) parts.push(t(finalizeReasons[s.reason] ?? s.reason));
+  if (s.codes?.length) parts.push(s.codes.join(', '));
+  if (s.tool_calls?.length) parts.push('→ ' + s.tool_calls.join(', '));
+  if (s.latency_ms != null) parts.push(`${s.latency_ms} ms`);
+  return parts.join(' · ');
+}
+function suggestedLink(reportId: string, query?: { start: string; end_exclusive: string; comparison: string; skus: string[] } | null) {
+  if (!query) return `/reports/new?parent=${reportId}`;
+  const params = new URLSearchParams({ parent: reportId, start: query.start, end: query.end_exclusive, comparison: query.comparison, skus: query.skus.join(',') });
+  return `/reports/new?${params}`;
+}
+
+const followupReasons: Record<string, string> = { SCOPE_CHANGED: '分析范围不同，无法比较', CURRENCY_CHANGED: '币种不同，无法比较', VALUE_UNAVAILABLE: '指标值不可用' };
+function signedPercent(value: string) { const number = Number(value) * 100; return `${number > 0 ? '+' : ''}${number.toFixed(2)}%`; }
+function useLiveSteps(reportId: string, runId?: string) {
+  // Server-sent events stream the trajectory while the model works; polling remains the fallback.
+  const [steps, setSteps] = useState<Step[]>([]);
+  useEffect(() => {
+    setSteps([]);
+    if (!runId || typeof EventSource === 'undefined') return;
+    const source = new EventSource(`/api/v1/reports/${reportId}/runs/${runId}/events`);
+    source.addEventListener('step', event => {
+      const data = JSON.parse((event as MessageEvent).data) as { index: number; step: Step };
+      setSteps(previous => [...previous.slice(0, data.index), data.step]);
+    });
+    source.addEventListener('done', () => source.close());
+    source.onerror = () => source.close();
+    return () => source.close();
+  }, [reportId, runId]);
+  return steps;
+}
+function ReportActions({ reportId }: { reportId: string }) {
+  useLanguage();
+  const client = useQueryClient();
+  const actions = useQuery({ queryKey: ['report-actions', reportId], queryFn: () => api<ActionItem[]>(`/reports/${reportId}/actions`) });
+  if (!actions.data?.length) return null;
+  return <section className="panel"><h2>{t("行动项")}</h2><p className="form-hint">{t("标记处理状态；之后的报告会按验证指标检查效果。全部行动项见")}<Link to="/automation">{t("自动化")}</Link>{t("。")}</p>
+    <ErrorBox error={actions.error} /><div className="action-list">{actions.data.map(item => <ActionRow key={`${item.id}-${item.revision}`} item={item} onChanged={() => void client.invalidateQueries({ queryKey: ['report-actions', reportId] })} />)}</div></section>;
+}
 
 export function ReportList() {
   useLanguage();
@@ -58,6 +113,7 @@ export function NewReport() {
   useLanguage();
   const [params] = useSearchParams();
   const parentId = params.get('parent');
+  const preset = params.get('start') ? { start: params.get('start')!, end: params.get('end') ?? '', comparison: params.get('comparison') ?? 'previous', skus: params.get('skus') ?? '' } : undefined;
   const parent = useQuery({ queryKey: ['report-parent', parentId], enabled: !!parentId, queryFn: () => api<Report>(`/reports/${parentId}`) });
   const versions = useQuery({ queryKey: ['datasets'], queryFn: () => api<Version[]>('/datasets') });
   const models = useQuery({ queryKey: ['model-configs'], queryFn: () => api<Model[]>('/model-configs') });
@@ -68,24 +124,26 @@ export function NewReport() {
   if (!versions.data?.length) return <section className="panel report-empty"><h1>{t("先准备一份订单数据")}</h1><p>{t("周报使用数据中心已发布的版本。")}</p><Link className="primary" to="/data">{t("前往数据中心")}</Link></section>;
   const choices = parentDataset.data && !versions.data.some(v => v.id === parentDataset.data.id)
     ? [parentDataset.data, ...versions.data] : versions.data;
-  return <ReportForm versions={choices} models={models.data ?? []} parent={parent.data} />;
+  return <ReportForm versions={choices} models={models.data ?? []} parent={parent.data} preset={preset} />;
 }
 
-function ReportForm({ versions, models, parent }: { versions: Version[]; models: Model[]; parent?: Report }) {
+type Preset = { start: string; end: string; comparison: string; skus: string };
+function ReportForm({ versions, models, parent, preset }: { versions: Version[]; models: Model[]; parent?: Report; preset?: Preset }) {
   useLanguage();
   const navigate = useNavigate();
   const first = versions.find(v => v.id === parent?.dataset_id) ?? versions[0];
   const end = first.snapshot.config.options.coverage_end_exclusive.slice(0, 10);
   const [title, setTitle] = useState(parent?.title ?? t("店铺经营周报"));
   const [dataset, setDataset] = useState(first.id);
-  const [start, setStart] = useState(parent?.query.start ?? day(end, -7));
-  const [last, setLast] = useState(parent ? day(parent.query.end_exclusive, -1) : day(end, -1));
-  const [comparison, setComparison] = useState(parent?.query.comparison ?? 'previous');
+  const [start, setStart] = useState(preset?.start ?? parent?.query.start ?? day(end, -7));
+  const [last, setLast] = useState(preset?.end ? day(preset.end, -1) : parent ? day(parent.query.end_exclusive, -1) : day(end, -1));
+  const [comparison, setComparison] = useState(preset?.comparison ?? parent?.query.comparison ?? 'previous');
   const [compareStart, setCompareStart] = useState(parent?.query.compare_start ?? '');
   const [compareLast, setCompareLast] = useState(parent?.query.compare_end_exclusive ? day(parent.query.compare_end_exclusive, -1) : '');
-  const [skus, setSkus] = useState(parent?.query.skus.join(', ') ?? '');
+  const [skus, setSkus] = useState(preset ? preset.skus.split(',').filter(Boolean).join(', ') : parent?.query.skus.join(', ') ?? '');
   const [model, setModel] = useState(parent ? parent.model_config_id ?? '' : models.find(m => m.is_default)?.id ?? '');
   const [minOrders, setMinOrders] = useState(parent?.rules.min_orders ?? 20);
+  const [reportLanguage, setReportLanguage] = useState(parent?.language ?? getLanguage());
   const [key, setKey] = useState({ body: '', value: crypto.randomUUID() });
   const create = useMutation({ mutationFn: (body: string) => {
     const token = key.body === body ? key.value : crypto.randomUUID(); setKey({ body, value: token });
@@ -96,7 +154,7 @@ function ReportForm({ versions, models, parent }: { versions: Version[]; models:
     create.mutate(JSON.stringify({ title, query: { dataset_id: dataset, start, end_exclusive: day(last, 1), comparison,
       compare_start: comparison === 'custom' ? compareStart : null, compare_end_exclusive: comparison === 'custom' ? day(compareLast, 1) : null,
       skus: skus.split(/[,，]/).map(s => s.trim()).filter(Boolean), granularity: 'day' }, model_config_id: model || null, parent_id: parent?.id ?? null,
-      rules: { ...(parent?.rules ?? {}), min_orders: minOrders } }));
+      rules: { ...(parent?.rules ?? {}), min_orders: minOrders }, language: reportLanguage }));
   }
   return <div className="reports"><Link className="back-link" to="/reports"><ArrowLeft size={15} />{t("返回周报中心")}</Link><section className="page-heading"><div><h1>{parent ? t("创建报告修订") : t("生成经营周报")}</h1><p>{parent ? t("保留原报告，生成新修订。") : t("选择数据与周期，模型可选。")}</p></div></section>
     <section className="panel report-form"><form onSubmit={submit}><fieldset disabled={create.isPending}><label className="field">{t("报告标题")}<input required maxLength={150} value={title} onChange={e => setTitle(e.target.value)} /></label>
@@ -107,17 +165,19 @@ function ReportForm({ versions, models, parent }: { versions: Version[]; models:
       <label className="field">{t("SKU 范围")}<input value={skus} onChange={e => setSkus(e.target.value)} placeholder={t("留空分析全部商品；多个 SKU 用逗号分隔")} /></label>
       <label className="field">{t("分析模型")}<select value={model} onChange={e => setModel(e.target.value)}><option value="">{t("无需模型 · 确定性摘要")}</option>{models.map(m => <option key={m.id} value={m.id}>{m.name}{m.capabilities?.usable ? '' : t("（未验证或不可用，将降级）")}</option>)}</select></label>
       <p className="form-hint">{t("使用模型可能产生费用，按已授权范围发送数据。")}<Link to="/settings/models">{t("管理模型")}</Link></p>
+      {models.find(m => m.id === model)?.consent_current === false && <p className="report-warning">{t("所选模型仍使用 1.x 的授权范围：本报告的追问只发送问题主题，商家备注不会发送给模型。可先在模型设置中确认新的授权范围。")}</p>}
+      <label className="field">{t("报告语言")}<select value={reportLanguage} onChange={e => setReportLanguage(e.target.value === 'en' ? 'en' : 'zh')}><option value="zh">中文</option><option value="en">English</option></select></label>
       <details className="report-rule-options"><summary>{t("异常规则与样本量")}</summary><label className="field">{t("两期最低订单量")}<input type="number" min={20} max={1000} required value={minOrders} onChange={e => setMinOrders(Number(e.target.value))} /></label><p>{t("默认检查销售变化 20%、退款占比 10%、毛利率下降 5 个百分点、负毛利、销售集中和日离群。阈值随报告冻结；样本不足会明确标注。")}</p></details>
       <ErrorBox error={create.error} /><div className="form-actions"><button className="primary">{create.isPending ? <LoaderCircle className="spin" size={16} /> : <FileBarChart2 size={16} />}{t("开始生成")}</button></div>
     </fieldset></form></section></div>;
 }
 
 function Sentences({ values, onEvidence }: { values: Sentence[]; onEvidence: (id: string) => void }) {
-  useLanguage(); return <div className="report-sentences">{values.map((s, i) => <p key={i}>{s.text} {s.evidence_refs.map(id => <button className="evidence-link" key={id} onClick={() => onEvidence(id)}>{t("查看证据")}</button>)}</p>)}</div>; }
+  useLanguage(); return <div className="report-sentences">{values.map((s, i) => <p key={i}>{s.text} {s.evidence_refs.map((id, n) => <button className="evidence-link" key={id} onClick={() => onEvidence(id)}>{s.evidence_refs.length > 1 ? t("证据 {0}", n + 1) : t("查看证据")}</button>)}</p>)}</div>; }
 function Advice({ findings, recommendations, onEvidence }: { findings: Finding[]; recommendations: Recommendation[]; onEvidence: (id: string) => void }) {
   useLanguage(); return <>
-  {findings.map(f => <div className="report-finding" key={f.id}><h3>{f.title}</h3><Sentences values={[f.observation]} onEvidence={onEvidence} />{f.hypotheses.map((h, i) => <p className="hypothesis" key={i}><b>{t("待验证假设")}</b>{h}</p>)}</div>)}
-  <div className="report-advice">{recommendations.map((r, i) => <div key={i}><span className="subtle-badge">{({ high: t("优先核查"), medium: t("建议跟进"), low: t("持续观察") })[r.priority]}</span><p>{r.action}</p><small>{t("预计工作量：")}{({ small: t("小"), medium: t("中"), large: t("大") })[r.effort]} {t("· 验证指标：")}{t(metricNames[r.verification_metric] ?? r.verification_metric)} {t("· 建议复查：")}{r.suggested_review_window === 'next_month' ? t("下月") : t("下周")}</small>{[...new Set(r.evidence_refs ?? findings.filter(f => r.rationale_finding_ids?.includes(f.id)).flatMap(f => f.evidence_refs))].map(id => <button className="evidence-link" key={id} onClick={() => onEvidence(id)}>{t("查看依据")}</button>)}</div>)}</div>
+  {findings.map(f => <div className="report-finding" key={f.id}><h3>{f.title}</h3><Sentences values={[f.observation, ...(f.supporting ?? [])]} onEvidence={onEvidence} />{f.hypotheses.map((h, i) => <p className="hypothesis" key={i}><b>{t("待验证假设")}</b>{h}</p>)}</div>)}
+  <div className="report-advice">{recommendations.map((r, i) => <div key={i}><span className="subtle-badge">{({ high: t("优先核查"), medium: t("建议跟进"), low: t("持续观察") })[r.priority]}</span><p>{r.action}</p><small>{t("预计工作量：")}{({ small: t("小"), medium: t("中"), large: t("大") })[r.effort]} {t("· 验证指标：")}{t(metricNames[r.verification_metric] ?? r.verification_metric)} {t("· 建议复查：")}{r.suggested_review_window === 'next_month' ? t("下月") : t("下周")}</small>{[...new Set(r.evidence_refs ?? findings.filter(f => r.rationale_finding_ids?.includes(f.id)).flatMap(f => f.evidence_refs))].map((id, n, all) => <button className="evidence-link" key={id} onClick={() => onEvidence(id)}>{all.length > 1 ? t("证据 {0}", n + 1) : t("查看依据")}</button>)}</div>)}</div>
   </>; }
 
 export function ReportDetail() {
@@ -128,8 +188,10 @@ export function ReportDetail() {
   useEffect(() => { if (evidenceId) drawer.current?.showModal(); }, [evidenceId]);
   const report = useQuery({ queryKey: ['report', reportId], queryFn: () => api<Report>(`/reports/${reportId}`), refetchInterval: q => !done.includes(q.state.data?.status ?? '') ? 1500 : false });
   const evidence = useQuery({ queryKey: ['report-evidence', reportId, evidenceId], enabled: !!evidenceId, queryFn: () => api<Record<string, unknown>>(`/reports/${reportId}/evidence/${evidenceId}`) });
-  const runs = useQuery({ queryKey: ['report-runs', reportId, report.data?.status], queryFn: () => api<{ id: string; status: string; steps: { phase: string; tool?: string }[]; usage: Record<string, number>; error_code: string | null }[]>(`/reports/${reportId}/runs`), refetchInterval: !done.includes(report.data?.status ?? '') ? 2000 : false });
+  const runs = useQuery({ queryKey: ['report-runs', reportId, report.data?.status], queryFn: () => api<{ id: string; status: string; steps: Step[]; usage: Record<string, number>; error_code: string | null; trace_id: string | null }[]>(`/reports/${reportId}/runs`), refetchInterval: !done.includes(report.data?.status ?? '') ? 2000 : false });
   const r = report.data, c = r?.content;
+  const activeRun = runs.data?.find(run => ['computing', 'analyzing'].includes(run.status));
+  const liveSteps = useLiveSteps(reportId ?? '', activeRun?.id);
   return <div className="reports"><Link className="back-link" to="/reports"><ArrowLeft size={15} />{t("返回周报中心")}</Link><ErrorBox error={report.error} />
     {r && <><section className="page-heading"><div><h1>{r.title}</h1><p>{r.query.start} {t("至")}{day(r.query.end_exclusive, -1)} {t("· 修订")} {r.revision} {t("· 数据版本")} {r.dataset_id.slice(0, 8)}</p></div><Link className="secondary" to={`/reports/new?parent=${r.id}`}>{t("创建新修订")}</Link></section>
       <div className="report-status" aria-live="polite"><ShieldCheck size={18} /><strong>{t(modes[c?.generation_mode ?? ''] ?? "正在准备报告")}</strong><span>{t(states[r.status])}</span>{!done.includes(r.status) && <LoaderCircle size={16} className="spin" />}</div>
@@ -145,16 +207,24 @@ export function ReportDetail() {
           {c.warnings.length > 0 && <p className="report-warning">{t("数据质量标记：")}{c.warnings.map(code => t(qualityNames[code] ?? code)).join('；')}{t("。请结合证据中的质量结果解释指标。")}</p>}
           <ul className="report-limitations">{c.limitations.map(l => <li key={l}>{l}</li>)}</ul></section>
         <section className="panel"><h2>{t("经营观察与行动建议")}</h2><p className="form-hint">{t("原因是待验证假设，建议需人工判断。")}</p><Advice findings={c.findings} recommendations={c.recommendations} onEvidence={setEvidenceId} /></section>
+        {!!c.action_followups?.length && <section className="panel"><h2>{t("上期建议跟进")}</h2><p className="form-hint">{t("用每条建议的验证指标，对比提出建议的报告与本期的数值。改善不代表因果。")}</p><div className="table-scroll"><table className="followup-table"><thead><tr><th>{t("建议")}</th><th>{t("验证指标")}</th><th>{t("提出时")}</th><th>{t("本期")}</th><th>{t("变化")}</th><th>{t("结论")}</th></tr></thead><tbody>{c.action_followups.map(f => <tr key={f.action_id}><td>{f.action_text}<small className="report-product-name">{f.source_period[0]} {t("至")}{day(f.source_period[1], -1)}</small></td><td>{t(metricNames[f.verification_metric] ?? f.verification_metric)}</td><td>{f.baseline ? formatMetric(f.baseline, c.metrics.currency, c.metrics.currency_exponent) : '—'}</td><td>{f.current ? formatMetric(f.current, c.metrics.currency, c.metrics.currency_exponent) : '—'}</td><td>{f.change_rate ? signedPercent(f.change_rate) : '—'}</td><td><b className={`followup-${f.state}`}>{t(followupStates[f.state])}</b>{f.reason && <small className="report-product-name">{t(followupReasons[f.reason] ?? f.reason)}</small>}</td></tr>)}</tbody></table></div></section>}
+        {!!c.merchant_notes?.length && <section className="panel"><h2>{t("商家备注")}</h2><ul className="note-list">{c.merchant_notes.map(n => <li key={n.id}><span className="subtle-badge">{t(noteKinds[n.kind] ?? n.kind)}</span><span>{n.start} {t("至")} {day(n.end_exclusive, -1)}</span><span>{n.text}</span><span /></li>)}</ul></section>}
+        {r.status !== 'failed' && done.includes(r.status) && <ReportActions reportId={r.id} />}
         <section className="panel"><h2>{t("证据附录")}</h2><div className="evidence-list">{c.evidence_index.map(ev => <button key={ev.evidence_id} onClick={() => setEvidenceId(ev.evidence_id)}><BookOpen size={15} /><strong>{t(toolNames[ev.tool])}</strong><span>{ev.evidence_id.slice(0, 8)}</span><ArrowRight size={14} /></button>)}</div><details className="report-snapshot"><summary>{t("冻结版本与指标口径")}</summary><pre>{JSON.stringify(c.snapshot, null, 2)}</pre></details></section>
-        {done.includes(r.status) && <><Exports reportId={r.id} /><Questions reportId={r.id} onEvidence={setEvidenceId} /></>}
+        {done.includes(r.status) && <><Exports reportId={r.id} /><Questions reportId={r.id} onEvidence={setEvidenceId} limitedConsent={limitedConsent(c)} /></>}
       </>}
-      <section className="panel report-run"><h2>{t("运行记录")}</h2><ErrorBox error={runs.error} />{runs.data?.map(run => <details key={run.id}><summary>{run.id.slice(0, 8)} · {run.status} {run.error_code && `· ${run.error_code}`}</summary><p>{run.steps.map(s => s.tool ? `${s.phase}: ${s.tool}` : s.phase).join(' → ')}</p><pre>{JSON.stringify(run.usage, null, 2)}</pre></details>)}</section>
+      <section className="panel report-run"><h2>{t("运行记录")}</h2><ErrorBox error={runs.error} />{runs.data?.map(run => <details key={run.id} open={run.id === activeRun?.id}><summary>{run.id.slice(0, 8)} · {run.status} {run.error_code && `· ${run.error_code}`}</summary><ol className="trajectory" aria-live={run.id === activeRun?.id ? 'polite' : undefined}>{(run.id === activeRun?.id && liveSteps.length > run.steps.length ? liveSteps : run.steps).map((s, i) => <li key={i} className={s.ok === false || s.error ? 'step-error' : undefined}>{stepText(s)}</li>)}</ol>{run.trace_id && <p className="form-hint">Trace {run.trace_id}</p>}<pre>{JSON.stringify(run.usage, null, 2)}</pre></details>)}</section>
     </>}
     {evidenceId && <dialog ref={drawer} className="evidence-overlay" aria-label={t("计算证据")} onCancel={() => setEvidenceId(null)} onClick={e => { if (e.target === e.currentTarget) setEvidenceId(null); }}><section className="evidence-drawer" onClick={e => e.stopPropagation()}><div className="panel-title"><div><h2>{t("计算证据")}</h2><p>{evidenceId}</p></div><button className="icon-button" aria-label={t("关闭证据")} onClick={() => setEvidenceId(null)}><X size={20} /></button></div><ErrorBox error={evidence.error} />{evidence.isPending ? <p>{t("读取中…")}</p> : <pre>{JSON.stringify(evidence.data, null, 2)}</pre>}</section></dialog>}
   </div>;
 }
 
-function Questions({ reportId, onEvidence }: { reportId: string; onEvidence: (id: string) => void }) {
+function limitedConsent(content: Content) {
+  // Each report keeps the consent frozen when it was created; v1 scopes never send question text.
+  const model = content.snapshot.model as { consent?: { fields?: string[] } } | null | undefined;
+  return !!model && !(model.consent?.fields ?? []).includes('question_text');
+}
+function Questions({ reportId, onEvidence, limitedConsent: limited = false }: { reportId: string; onEvidence: (id: string) => void; limitedConsent?: boolean }) {
   useLanguage();
   const client = useQueryClient();
   const [question, setQuestion] = useState('');
@@ -165,9 +235,9 @@ function Questions({ reportId, onEvidence }: { reportId: string; onEvidence: (id
   const send = useMutation({ mutationFn: () => api(`/reports/${reportId}/messages`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify({ question }) }),
     onSuccess: () => { setQuestion(''); setKey(crypto.randomUUID()); setOffset(0); void client.invalidateQueries({ queryKey: ['report-messages', reportId] }); void client.invalidateQueries({ queryKey: ['report-runs', reportId] }); } });
   const busy = send.isPending || messages.data?.items.some(m => ['queued', 'running'].includes(m.status));
-  return <section className="panel report-questions"><h2>{t("追问报告")}</h2><p className="form-hint">{t("可追问销售、退款、成本与商品；更换周期请新建报告。")}</p>
+  return <section className="panel report-questions"><h2>{t("追问报告")}</h2><p className="form-hint">{t("可追问销售、退款、成本与商品；更换周期请新建报告。")}</p>{limited && <p className="report-warning">{t("本报告创建时的模型授权不含追问原文，模型只会收到问题主题。在模型设置中确认新的授权范围后，创建新修订即可使用完整追问。")}</p>}
     <form onSubmit={e => { e.preventDefault(); send.mutate(); }}><label className="field">{t("你的问题")}<textarea required maxLength={2000} rows={3} value={question} onChange={e => { setQuestion(e.target.value); setKey(crypto.randomUUID()); }} placeholder={t("例如：这期退款需要关注什么？")} /></label><button className="primary" disabled={busy || !question.trim()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />}{t("提交追问")}</button></form><ErrorBox error={send.error ?? messages.error} />
-    <div className="question-list">{messages.data?.items.map(m => <article key={m.id}><h3>{m.question}</h3><span className="import-state">{t(states[m.status])}</span>{m.answer && <><p className="form-hint">{t(modes[m.answer.generation_mode])}{m.answer.error_code && ` · ${m.answer.error_code}`}</p><p>{message(m.answer.message)}</p><Sentences values={m.answer.summary} onEvidence={onEvidence} />{m.answer.analysis && <Advice findings={m.answer.analysis.findings} recommendations={m.answer.analysis.recommendations} onEvidence={onEvidence} />}{m.answer.new_analysis_required && <Link className="text-button" to={`/reports/new?parent=${reportId}`}>{t("选择范围并创建新分析")}</Link>}</>}{m.status === 'failed' && <p className="report-warning">{t("本次追问未完成，原报告保持不变。可以重新提交。")}</p>}</article>)}</div>
+    <div className="question-list">{messages.data?.items.map(m => <article key={m.id}><h3>{m.question}</h3><span className="import-state">{t(states[m.status])}</span>{m.answer && <><p className="form-hint">{t(modes[m.answer.generation_mode])}{m.answer.error_code && ` · ${m.answer.error_code}`}</p>{m.answer.message && <p>{message(m.answer.message)}</p>}{m.answer.kind === 'clarify' && !!m.answer.options?.length && <div className="clarify-options">{m.answer.options.map(option => <button type="button" className="secondary" key={option} onClick={() => { setQuestion(option); setKey(crypto.randomUUID()); }}>{option}</button>)}</div>}<Sentences values={m.answer.summary} onEvidence={onEvidence} />{m.answer.analysis && <Advice findings={m.answer.analysis.findings} recommendations={m.answer.analysis.recommendations} onEvidence={onEvidence} />}{m.answer.new_analysis_required && <Link className="text-button" to={suggestedLink(reportId, m.answer.suggested_query)}>{t(m.answer.suggested_query ? "按建议范围创建新分析" : "选择范围并创建新分析")}</Link>}</>}{m.status === 'failed' && <p className="report-warning">{t("本次追问未完成，原报告保持不变。可以重新提交。")}</p>}</article>)}</div>
     {messages.data && messages.data.total > 20 && <div className="pagination"><button className="secondary" disabled={!offset} onClick={() => setOffset(offset - 20)}>{t("较新追问")}</button><button className="secondary" disabled={offset + 20 >= messages.data.total} onClick={() => setOffset(offset + 20)}>{t("较早追问")}</button></div>}
   </section>;
 }

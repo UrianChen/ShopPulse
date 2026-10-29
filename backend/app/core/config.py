@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     max_upload_mib: int = Field(default=20, ge=1, le=100)
     max_import_rows: int = Field(default=100000, ge=1, le=100000)
     parse_timeout_seconds: int = Field(default=120, ge=5, le=300)
+    # Store redacted, truncated model requests/responses on agent runs (debugging only).
+    agent_debug_capture: bool = False
+    agent_debug_retention_days: int = Field(default=7, ge=1, le=90)
+    # Order lines a single SKU drill-down may load in the worker process.
+    drill_row_limit: int = Field(default=20000, ge=100, le=100000)
+    scheduler_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_public_url(self):

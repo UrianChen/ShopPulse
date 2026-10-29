@@ -37,11 +37,29 @@
   },
   {
     "ecosystem": "python",
+    "name": "certifi",
+    "version": "2026.10.23",
+    "license": "MPL-2.0",
+    "notices": [
+      "licenses/python/certifi/5-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
     "name": "cffi",
     "version": "2.1.1",
     "license": "MIT-0",
     "notices": [
       "licenses/python/cffi/8-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "charset-normalizer",
+    "version": "3.5.2",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/charset-normalizer/7-LICENSE.txt"
     ]
   },
   {
@@ -97,6 +115,15 @@
     "notices": [
       "licenses/python/fonttools/366-LICENSE.txt",
       "licenses/python/fonttools/367-LICENSE.external.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "googleapis-common-protos",
+    "version": "1.76.0",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/googleapis-common-protos/199-LICENSE.txt"
     ]
   },
   {
@@ -188,6 +215,69 @@
   },
   {
     "ecosystem": "python",
+    "name": "opentelemetry-exporter-http-transport",
+    "version": "0.66b1",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/opentelemetry-exporter-http-transport/12-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "opentelemetry-exporter-otlp-common",
+    "version": "0.66b1",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/opentelemetry-exporter-otlp-common/11-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "opentelemetry-exporter-otlp-proto-common",
+    "version": "1.45.1",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/opentelemetry-exporter-otlp-proto-common/15-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "opentelemetry-exporter-otlp-proto-http",
+    "version": "1.45.1",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/opentelemetry-exporter-otlp-proto-http/14-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "opentelemetry-proto",
+    "version": "1.45.1",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/opentelemetry-proto/45-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "opentelemetry-sdk",
+    "version": "1.45.1",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/opentelemetry-sdk/71-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "opentelemetry-semantic-conventions",
+    "version": "0.66b1",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/opentelemetry-semantic-conventions/133-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
     "name": "pandas",
     "version": "3.0.6",
     "license": "BSD 3-Clause License\n\n Copyright (c) 2008-2011, AQR Capital Management, LLC, Lambda Foundry, Inc. and PyData Development Team\n All rights reserved.\n\n Copyright (c) 2011-2026, Open source contributors.\n\n Redistribution and use in source and binary forms, with or without\n modification, are permitted p",
@@ -202,6 +292,15 @@
     "license": "Apache-2.0",
     "notices": [
       "licenses/python/playwright/7-LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "protobuf",
+    "version": "7.36.2",
+    "license": "3-Clause BSD License",
+    "notices": [
+      "licenses/python/protobuf/60-LICENSE.txt"
     ]
   },
   {
@@ -305,6 +404,16 @@
   },
   {
     "ecosystem": "python",
+    "name": "requests",
+    "version": "2.34.2",
+    "license": "Apache-2.0",
+    "notices": [
+      "licenses/python/requests/5-LICENSE.txt",
+      "licenses/python/requests/6-NOTICE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
     "name": "six",
     "version": "1.17.0",
     "license": "MIT",
@@ -356,6 +465,15 @@
     "notices": [
       "licenses/python/tzdata/5-LICENSE.txt",
       "licenses/python/tzdata/6-LICENSE_APACHE.txt"
+    ]
+  },
+  {
+    "ecosystem": "python",
+    "name": "urllib3",
+    "version": "2.8.0",
+    "license": "MIT",
+    "notices": [
+      "licenses/python/urllib3/5-LICENSE.txt.txt"
     ]
   },
   {

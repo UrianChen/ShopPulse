@@ -10,7 +10,7 @@ from sqlalchemy import select, text
 
 from app.core.config import settings
 from app.core.errors import AppError
-from app.db.models import ModelConfig
+from app.db.models import ModelConfig, ReportSchedule
 
 
 def cipher(version: int) -> AESGCM:
@@ -57,6 +57,24 @@ def decrypt(item: ModelConfig) -> str:
         raise AppError(503, "CREDENTIAL_UNAVAILABLE", "凭证无法解密，请检查主密钥版本。") from None
 
 
+def seal(scope: str, workspace_id, item_id, value: str) -> tuple[str, int]:
+    """Encrypt another secret (e.g. a webhook URL with a token) bound to its owner record."""
+    version = settings().credential_key_version
+    nonce = os.urandom(12)
+    label = f"shoppulse:{scope}:{workspace_id}:{item_id}:{version}".encode()
+    encrypted = cipher(version).encrypt(nonce, value.encode(), label)
+    return base64.b64encode(nonce + encrypted).decode(), version
+
+
+def unseal(scope: str, workspace_id, item_id, ciphertext: str, version: int) -> str:
+    try:
+        raw = base64.b64decode(ciphertext, validate=True)
+        label = f"shoppulse:{scope}:{workspace_id}:{item_id}:{version}".encode()
+        return cipher(version).decrypt(raw[:12], raw[12:], label).decode()
+    except Exception:
+        raise AppError(503, "CREDENTIAL_UNAVAILABLE", "密文无法解密，请检查主密钥版本。") from None
+
+
 def lock_configs(db):
     # Shared with API writes; key rotation cannot race new writes or default selection.
     db.execute(text("SELECT pg_advisory_xact_lock(731603)"))
@@ -75,4 +93,18 @@ def rotate(db, dry_run=False) -> int:
                     encrypt(item, value)
                     if decrypt(item) != value:
                         raise AppError(503, "CREDENTIAL_UNAVAILABLE", "轮换验证失败。")
+    for schedule in db.scalars(select(ReportSchedule).with_for_update()).all():
+        if not schedule.webhook_ciphertext:
+            continue
+        args = ("webhook", schedule.workspace_id, schedule.id)
+        value = unseal(*args, schedule.webhook_ciphertext, schedule.webhook_key_version)
+        if schedule.webhook_key_version != settings().credential_key_version:
+            count += 1
+            if not dry_run:
+                schedule.webhook_ciphertext, schedule.webhook_key_version = seal(*args, value)
+                if (
+                    unseal(*args, schedule.webhook_ciphertext, schedule.webhook_key_version)
+                    != value
+                ):
+                    raise AppError(503, "CREDENTIAL_UNAVAILABLE", "轮换验证失败。")
     return count

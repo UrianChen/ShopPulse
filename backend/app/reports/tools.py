@@ -1,33 +1,130 @@
-"""Tools consume a frozen metric snapshot, never execute model code or SQL."""
+"""Read-only analysis tools over a frozen report context. No model code, SQL or network.
+
+Every call produces an evidence record (arguments, hashes, versions) that sentence bindings can
+reference. Drill-down tools that need order lines receive a server-side ``drill`` callback; the
+model process never touches the database.
+"""
 
 import hashlib
 import json
 import uuid
-from decimal import Decimal, localcontext
-from statistics import median
+from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.reports.schema import RULE_VERSION
+from app.reports.anomalies import anomalies
+from app.reports.grammar import LABELS as GRAMMAR_LABELS
+from app.reports.schema import BUDGETS
+
+__all__ = ["anomalies"]
 
 LABELS = {
-    "net_sales": "净销售额",
-    "paid_orders": "支付订单量",
-    "aov": "净客单价",
-    "gross_profit": "商品毛利",
-    "gross_margin": "商品毛利率",
-    "refund_amount_rate": "累计退款金额占比",
-    "gross_sales": "退款前商品实付",
-    "refund_amount": "支付订单累计退款",
-    "net_cogs": "净商品成本",
-    "paid_units": "支付件数",
+    key: GRAMMAR_LABELS["metric"]["zh"][key]
+    for key in (
+        "net_sales",
+        "paid_orders",
+        "aov",
+        "gross_profit",
+        "gross_margin",
+        "refund_amount_rate",
+        "gross_sales",
+        "refund_amount",
+        "net_cogs",
+        "paid_units",
+    )
 }
-LIMITATIONS = [
-    "未提供广告、流量、库存数据，不能评估投放效果、转化率或补货数量。",
-    "观察到的变化不能证明原因；模型提出的原因均为待验证假设。",
-    "订单按支付时间归期，累计退款反映数据截止时点，比较期的退款观察时长可能不同。",
+LIMITATIONS = {
+    "zh": [
+        "未提供广告、流量、库存数据，不能评估投放效果、转化率或补货数量。",
+        "观察到的变化不能证明原因；模型提出的原因均为待验证假设。",
+        "订单按支付时间归期，累计退款反映数据截止时点，比较期的退款观察时长可能不同。",
+    ],
+    "en": [
+        "No advertising, traffic or inventory data is provided, so campaign effect, conversion "
+        "and restocking cannot be assessed.",
+        "Observed changes do not prove causes; causes proposed by the model are hypotheses.",
+        "Orders are assigned by payment time and refunds are cumulative at the data cutoff, so "
+        "refund observation windows can differ between periods.",
+    ],
+}
+DEFINITIONS = {
+    "zh": {
+        "net_sales": "支付订单的商品实付减去这些订单的累计退款，不含运费。",
+        "paid_orders": "周期内按支付时间归属的去重订单数。",
+        "aov": "净销售额除以支付订单量。",
+        "gross_profit": "净销售额减去净商品成本；未扣广告、佣金、运费、人工和税费。",
+        "gross_margin": "商品毛利除以净销售额。",
+        "refund_amount_rate": "支付订单累计退款除以退款前商品实付。",
+        "gross_sales": "支付订单的商品实付合计，未扣退款。",
+        "refund_amount": "本期支付订单在数据截止时点的累计退款。",
+        "net_cogs": "按发布时成本版本计算的商品成本，扣除已回库数量。",
+        "paid_units": "支付订单中的商品件数。",
+        "gross_aov": "退款前商品实付除以支付订单量。",
+        "refunded_order_rate": "发生退款的订单占支付订单的比例。",
+        "cost_line_coverage": "有成本的订单明细占全部明细的比例。",
+        "cost_amount_coverage": "有成本的明细实付占全部实付的比例。",
+    },
+    "en": {
+        "net_sales": "Paid product amounts minus cumulative refunds on those orders, "
+        "excluding shipping.",
+        "paid_orders": "Distinct orders assigned to the period by payment time.",
+        "aov": "Net sales divided by paid orders.",
+        "gross_profit": "Net sales minus net cost of goods; advertising, commission, shipping, "
+        "labour and tax are not deducted.",
+        "gross_margin": "Product gross profit divided by net sales.",
+        "refund_amount_rate": "Cumulative refunds on paid orders divided by paid sales before "
+        "refunds.",
+        "gross_sales": "Paid product amounts before refunds.",
+        "refund_amount": "Cumulative refunds at the data cutoff for orders paid in the period.",
+        "net_cogs": "Cost of goods from the cost version frozen at publication, net of "
+        "restocked units.",
+        "paid_units": "Units on paid orders.",
+        "gross_aov": "Paid sales before refunds divided by paid orders.",
+        "refunded_order_rate": "Share of paid orders with a refund.",
+        "cost_line_coverage": "Share of order lines with a known cost.",
+        "cost_amount_coverage": "Share of paid amount on lines with a known cost.",
+    },
+}
+KEY_METRICS = (
+    "net_sales",
+    "paid_orders",
+    "paid_units",
+    "aov",
+    "gross_profit",
+    "gross_margin",
+    "refund_amount",
+    "refund_amount_rate",
+)
+CORE = (
+    "get_data_quality",
+    "calculate_metrics",
+    "get_sales_trend",
+    "rank_products",
+    "compare_periods",
+    "decompose_sales_change",
+    "detect_anomalies",
+)
+MetricName = Literal[
+    "gross_sales",
+    "refund_amount",
+    "net_sales",
+    "paid_orders",
+    "paid_units",
+    "aov",
+    "gross_aov",
+    "net_cogs",
+    "gross_profit",
+    "gross_margin",
+    "refund_amount_rate",
+    "refunded_order_rate",
+    "cost_line_coverage",
+    "cost_amount_coverage",
 ]
+
+
+def limitations(language="zh"):
+    return list(LIMITATIONS.get(language, LIMITATIONS["zh"]))
 
 
 def digest(value):
@@ -36,159 +133,10 @@ def digest(value):
     ).hexdigest()
 
 
-def number(metrics, key):
-    value = metrics[key]["value"]
-    return Decimal(value) if value is not None else None
-
-
-def anomalies(result, rankings, stats, rules):
-    with localcontext() as context:
-        context.prec = 70
-        return _anomalies(result, rankings, stats, rules)
-
-
-def _anomalies(result, rankings, stats, rules):
-    current, previous = result["current"], result["previous"]
-    metrics = current["metrics"]
-    orders = number(metrics, "paid_orders") or 0
-    enough = current["coverage_complete"] and orders >= rules["min_orders"]
-    both = (
-        enough
-        and previous
-        and previous["coverage_complete"]
-        and ((number(previous["metrics"], "paid_orders") or 0) >= rules["min_orders"])
-    )
-    findings, checks = [], []
-
-    def check(code, eligible, triggered, values, limitation):
-        state = (
-            "triggered" if eligible and triggered else "clear" if eligible else "insufficient_data"
-        )
-        record = {"code": code, "state": state, "values": values, "limitation": limitation}
-        checks.append(record)
-        if state == "triggered":
-            findings.append(record)
-
-    change = (result["comparison"] or {}).get("net_sales", {}).get("change_rate")
-    check(
-        "SALES_CHANGE",
-        bool(both and change is not None),
-        change is not None and abs(Decimal(change)) >= Decimal(str(rules["sales_change"])),
-        {"change_rate": change, "threshold": str(rules["sales_change"]), "orders": str(orders)},
-        "启发式波动提醒，不是统计显著性或业务恶化的证明。",
-    )
-    refund = number(metrics, "refund_amount_rate")
-    check(
-        "HIGH_REFUND",
-        enough and refund is not None,
-        refund is not None and refund >= Decimal(str(rules["refund_rate"])),
-        {
-            "rate": str(refund) if refund is not None else None,
-            "threshold": str(rules["refund_rate"]),
-        },
-        "支付订单累计退款，不同周期观察时长不同。",
-    )
-    margin = (result["comparison"] or {}).get("gross_margin", {}).get("delta_pp")
-    complete_cost = (
-        metrics["gross_profit"]["quality"] == "confirmed"
-        and previous
-        and previous["metrics"]["gross_profit"]["quality"] == "confirmed"
-    )
-    check(
-        "MARGIN_DROP",
-        bool(both and complete_cost and margin is not None),
-        margin is not None and Decimal(margin) <= -Decimal(str(rules["margin_drop_pp"])),
-        {"delta_pp": margin, "threshold_pp": str(rules["margin_drop_pp"])},
-        "价格、商品结构和成本只能作为描述性线索，需额外证据验证原因。",
-    )
-    negative = [
-        p
-        for p in rankings.get("confirmed_negative_profit", rankings["gross_profit:asc"])
-        if p["current"]["metrics"]["gross_profit"]["quality"] == "confirmed"
-        and (number(p["current"]["metrics"], "gross_profit") or 0) < 0
-    ]
-    check(
-        "NEGATIVE_PROFIT",
-        current["coverage_complete"]
-        and (bool(negative) or metrics["gross_profit"]["quality"] == "confirmed"),
-        bool(negative),
-        {
-            "items": negative,
-            "shown": len(negative),
-            "limit": 50,
-            "small_sample": orders < rules["min_orders"],
-        },
-        "只列出成本完整商品，最多展示五十项；小样本不推断长期盈利能力。",
-    )
-    total = number(metrics, "net_sales")
-    top = rankings["net_sales:desc"][:3]
-    ratio = (
-        sum((number(p["current"]["metrics"], "net_sales") or 0 for p in top), Decimal(0)) / total
-        if total and total > 0
-        else None
-    )
-    check(
-        "CONCENTRATION",
-        current["coverage_complete"]
-        and stats["active_skus"] >= 5
-        and stats["negative_sales"] == 0
-        and stats["unmapped"] == 0
-        and ratio is not None,
-        ratio is not None and ratio >= Decimal(str(rules["concentration"])),
-        {
-            "top_three_share": str(ratio) if ratio is not None else None,
-            "threshold": str(rules["concentration"]),
-            "active_skus": stats["active_skus"],
-        },
-        "销售集中提醒，不直接断言经营风险已经发生。",
-    )
-    points, outliers, eligible_days = result["trend"], [], 0
-    if result["query"]["granularity"] == "day":
-        for i in range(28, len(points)):
-            window = points[i - 28 : i]
-            if not all(
-                p["coverage_complete"] and number(p["metrics"], "net_sales") is not None
-                for p in [*window, points[i]]
-            ):
-                continue
-            values = [number(p["metrics"], "net_sales") for p in window]
-            center = median(values)
-            mad = median([abs(value - center) for value in values])
-            if mad == 0:
-                continue
-            eligible_days += 1
-            z = Decimal("0.6745") * (number(points[i]["metrics"], "net_sales") - center) / mad
-            if abs(z) >= Decimal(str(rules["mad_z"])):
-                outliers.append(
-                    {
-                        "date": points[i]["start"],
-                        "z": str(z),
-                        "median": str(center),
-                        "mad": str(mad),
-                    }
-                )
-    check(
-        "DAILY_MAD",
-        eligible_days > 0,
-        bool(outliers),
-        {
-            "items": outliers,
-            "eligible_days": eligible_days,
-            "threshold": str(rules["mad_z"]),
-            "baseline_days": 28,
-        },
-        "仅使用冻结范围内前置完整日；不足二十八日或 MAD 为零时 insufficient_baseline；"
-        "无促销或节假日校正。",
-    )
-    if not eligible_days:
-        checks[-1]["state"] = "insufficient_baseline"
-    return {
-        "rule_version": RULE_VERSION,
-        "thresholds": rules,
-        "findings": findings,
-        "checks": checks,
-        "data_warnings": result["warnings"],
-    }
+class ToolError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
 
 
 class NoArgs(BaseModel):
@@ -201,58 +149,229 @@ class RankArgs(NoArgs):
     top_k: int = Field(default=10, ge=1, le=50, strict=True)
 
 
+class TrendArgs(NoArgs):
+    start: date | None = None
+    end_exclusive: date | None = None
+    metrics: list[MetricName] = Field(default_factory=list, max_length=6)
+
+
+class CompareArgs(NoArgs):
+    metrics: list[MetricName] = Field(default_factory=list, max_length=14)
+
+
+class SkuArgs(NoArgs):
+    sku: str = Field(min_length=1, max_length=128)
+
+
+class RefundArgs(NoArgs):
+    by: Literal["sku", "day"] = "sku"
+    top_k: int = Field(default=5, ge=1, le=10, strict=True)
+
+
+class CostArgs(NoArgs):
+    top_k: int = Field(default=5, ge=1, le=10, strict=True)
+
+
+class MetricArgs(NoArgs):
+    metric: MetricName
+
+
 TOOLS = {
-    name: NoArgs
-    for name in (
-        "get_data_quality",
-        "calculate_metrics",
-        "get_sales_trend",
-        "compare_periods",
-        "decompose_sales_change",
-        "detect_anomalies",
-    )
+    "get_data_quality": NoArgs,
+    "calculate_metrics": NoArgs,
+    "get_sales_trend": TrendArgs,
+    "rank_products": RankArgs,
+    "compare_periods": CompareArgs,
+    "decompose_sales_change": NoArgs,
+    "detect_anomalies": NoArgs,
+    "inspect_sku": SkuArgs,
+    "refund_breakdown": RefundArgs,
+    "cost_coverage": CostArgs,
+    "explain_metric": MetricArgs,
+    "check_recommendation": NoArgs,
+    "get_merchant_notes": NoArgs,
 }
-TOOLS["rank_products"] = RankArgs
+DESCRIPTIONS = {
+    "get_data_quality": "Coverage, quality warnings and excluded rows for the frozen scope.",
+    "calculate_metrics": "Current and comparison period metrics.",
+    "get_sales_trend": "Daily trend points; optionally a date sub-range inside the report "
+    "period and a metric subset.",
+    "rank_products": "Products ranked by a metric (asc/desc).",
+    "compare_periods": "Deltas, change rates and comparability states between periods.",
+    "decompose_sales_change": "Descriptive product, order-count and order-value contributions "
+    "to the net sales change.",
+    "detect_anomalies": "Deterministic anomaly rules with thresholds, states and items.",
+    "inspect_sku": "Drill into one SKU: both periods, comparison and its daily trend.",
+    "refund_breakdown": "Largest refunds by SKU or by day.",
+    "cost_coverage": "Products whose cost is missing, by sales impact.",
+    "explain_metric": "Server definition of a metric (no values).",
+    "check_recommendation": "Earlier recommendations due for review with baseline and current "
+    "values of their verification metric.",
+    "get_merchant_notes": "Merchant notes (promotions, holidays, stockouts, price changes) "
+    "overlapping the report periods.",
+}
+
+
+def metric_subset(metrics, keys):
+    return {k: metrics[k] for k in keys if k in metrics}
 
 
 class ToolRegistry:
-    def __init__(self, context, report_id, run_id, evidence=None):
+    def __init__(
+        self,
+        context,
+        report_id,
+        run_id,
+        evidence=None,
+        drill=None,
+        cache=None,
+        limit=BUDGETS["tools"],
+    ):
         self.context, self.report_id, self.run_id = context, report_id, run_id
         self.evidence = list(evidence or [])
+        self.drill = drill
+        self.cache = dict(cache or {})
+        self.limit = limit
         self.calls = 0
 
-    def execute(self, name, args):
-        if name not in TOOLS or self.calls >= 8:
-            raise ValueError("TOOL_NOT_ALLOWED_OR_BUDGET")
-        parsed = TOOLS[name].model_validate(args).model_dump()
-        self.calls += 1
-        result = self.context["result"]
+    def scope_dates(self):
+        query = self.context["result"]["query"]
+        return date.fromisoformat(query["start"]), date.fromisoformat(query["end_exclusive"])
+
+    def compute(self, name, parsed):
+        ctx = self.context
+        result = ctx["result"]
+        language = ctx.get("language", "zh")
         if name == "calculate_metrics":
-            payload = {"current": result["current"], "previous": result["previous"]}
-        elif name == "get_data_quality":
-            payload = {
+            return {"current": result["current"], "previous": result["previous"]}
+        if name == "get_data_quality":
+            return {
                 "warnings": result["warnings"],
                 "quality": result["current"]["quality"],
                 "excluded_rows": result["excluded_rows"],
                 "coverage_complete": result["current"]["coverage_complete"],
             }
-        elif name == "get_sales_trend":
-            payload = {"points": result["trend"]}
-        elif name == "rank_products":
-            payload = {
-                "items": self.context["rankings"][f"{parsed['metric']}:{parsed['direction']}"][
-                    : parsed["top_k"]
-                ],
+        if name == "get_sales_trend":
+            start, end = self.scope_dates()
+            lo = date.fromisoformat(parsed["start"]) if parsed["start"] else start
+            hi = date.fromisoformat(parsed["end_exclusive"]) if parsed["end_exclusive"] else end
+            if not start <= lo < hi <= end:
+                raise ToolError("OUT_OF_SCOPE")
+            points = [
+                p
+                for p in result["trend"]
+                if lo <= date.fromisoformat(p["start"])
+                and date.fromisoformat(p["end_exclusive"]) <= hi
+            ]
+            if parsed["metrics"]:
+                points = [
+                    {
+                        "start": p["start"],
+                        "end_exclusive": p["end_exclusive"],
+                        "coverage_complete": p["coverage_complete"],
+                        "metrics": metric_subset(p["metrics"], parsed["metrics"]),
+                    }
+                    for p in points
+                ]
+            return {"points": points}
+        if name == "rank_products":
+            key = f"{parsed['metric']}:{parsed['direction']}"
+            return {
+                "items": ctx["rankings"][key][: parsed["top_k"]],
                 "total": result["product_count"],
             }
-        elif name == "compare_periods":
-            payload = {"comparison": result["comparison"]}
-        elif name == "decompose_sales_change":
-            payload = result["contributions"]
-        else:
-            payload = anomalies(
-                result, self.context["rankings"], self.context["stats"], self.context["rules"]
+        if name == "compare_periods":
+            comparison = result["comparison"]
+            if comparison is not None and parsed["metrics"]:
+                comparison = metric_subset(comparison, parsed["metrics"])
+            return {"comparison": comparison}
+        if name == "decompose_sales_change":
+            return result["contributions"]
+        if name == "detect_anomalies":
+            return anomalies(
+                result, ctx["rankings"], ctx["stats"], ctx["rules"], ctx.get("language", "zh")
             )
+        if name == "inspect_sku":
+            scoped = result["query"]["skus"]
+            if scoped and parsed["sku"] not in scoped:
+                raise ToolError("OUT_OF_SCOPE")
+            if self.drill is None:
+                raise ToolError("DRILL_UNAVAILABLE")
+            return self.drill(parsed["sku"])
+        if name == "refund_breakdown":
+            keys = ("refund_amount", "refund_amount_rate", "gross_sales", "net_sales")
+            if parsed["by"] == "sku":
+                items = [
+                    {
+                        "sku": p["sku"],
+                        "product_name": p["product_name"],
+                        "metrics": metric_subset(p["current"]["metrics"], keys),
+                    }
+                    for p in ctx["rankings"]["refund_amount:desc"]
+                    if p["current"]["metrics"]["refund_amount"]["value"] not in (None, "0")
+                ]
+            else:
+                points = [
+                    p
+                    for p in result["trend"]
+                    if p["metrics"]["refund_amount"]["value"] not in (None, "0")
+                ]
+                points.sort(
+                    key=lambda p: (-int(p["metrics"]["refund_amount"]["value"]), p["start"])
+                )
+                items = [
+                    {"start": p["start"], "metrics": metric_subset(p["metrics"], keys)}
+                    for p in points
+                ]
+            return {
+                "by": parsed["by"],
+                "items": items[: parsed["top_k"]],
+                "total": {"metrics": metric_subset(result["current"]["metrics"], keys)},
+            }
+        if name == "cost_coverage":
+            return {
+                "summary": result["current"]["quality"],
+                "items": [
+                    {
+                        "sku": p["sku"],
+                        "product_name": p["product_name"],
+                        "missing_cost_rows": p["current"]["quality"]["missing_cost_rows"],
+                        "metrics": metric_subset(p["current"]["metrics"], ("net_sales",)),
+                    }
+                    for p in ctx.get("missing_cost", [])[: parsed["top_k"]]
+                ],
+            }
+        if name == "explain_metric":
+            metric = parsed["metric"]
+            return {
+                "metric": metric,
+                "label": GRAMMAR_LABELS["metric"][language][metric],
+                "definition": DEFINITIONS[language][metric],
+                "unit": ctx["result"]["current"]["metrics"][metric]["unit"],
+            }
+        if name == "check_recommendation":
+            return {"items": ctx.get("followups", [])}
+        return {"items": ctx.get("notes", [])}
+
+    def execute(self, name, args, core=False):
+        if name not in TOOLS:
+            raise ToolError("TOOL_NOT_ALLOWED")
+        if not core and self.calls >= self.limit:
+            raise ToolError("TOOL_BUDGET")
+        try:
+            parsed = TOOLS[name].model_validate(args or {}).model_dump(mode="json")
+        except ValidationError:
+            raise ToolError("INVALID_ARGUMENTS") from None
+        if not core:
+            self.calls += 1
+        args_hash = digest(parsed)
+        cached = self.cache.get((name, args_hash))
+        if cached is not None:
+            if all(e["evidence_id"] != cached["evidence_id"] for e in self.evidence):
+                self.evidence.append(cached)
+            return cached
+        payload = self.compute(name, parsed)
+        result = self.context["result"]
         evidence = {
             "evidence_id": str(uuid.uuid4()),
             "report_id": self.report_id,
@@ -260,61 +379,165 @@ class ToolRegistry:
             "dataset_id": result["dataset_id"],
             "scope": result["query"],
             "tool": name,
-            "tool_version": "1.0",
+            "tool_version": "2.0",
             "metric_definition_version": result["metric_definition_version"],
             "engine_version": result["engine_version"],
             "args": parsed,
-            "args_hash": digest(parsed),
+            "args_hash": args_hash,
             "payload": payload,
             "result_hash": digest(payload),
         }
+        self.cache[(name, args_hash)] = evidence
         self.evidence.append(evidence)
         return evidence
 
     def core(self):
-        return {name: self.execute(name, {}) for name in TOOLS}
+        names = list(CORE)
+        if self.context.get("followups"):
+            names.append("check_recommendation")
+        if self.context.get("notes"):
+            names.append("get_merchant_notes")
+        return {name: self.execute(name, {}, core=True) for name in names}
 
 
-def metric_facts(evidence):
+HIDDEN = {"order_id", "source_row_number", "unavailable_reason", "row_count"}
+
+
+def project(value, include_names, cap=10, metric_keys=KEY_METRICS, key=None, drop=frozenset()):
+    """Model-facing view of a payload. Truncation and dropped keys keep remaining paths valid."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if k in HIDDEN or k in drop:
+                continue
+            if k == "product_name" and not include_names:
+                continue
+            if k in {"metrics", "comparison"} and isinstance(v, dict) and metric_keys:
+                v = {m: v[m] for m in metric_keys if m in v}
+            out[k] = project(v, include_names, cap, metric_keys, k, drop)
+        return out
+    if isinstance(value, list):
+        # Rule checks and warnings are short fixed lists the model must always see in full.
+        limit = (
+            None
+            if key in {"checks", "warnings", "data_warnings"}
+            else 31
+            if key in {"points", "trend"}
+            else cap
+        )
+        return [project(v, include_names, cap, metric_keys, key, drop) for v in value[:limit]]
+    if isinstance(value, str):
+        return value[:160]
+    return value
+
+
+def wire(value, include_names):
+    """Backwards-compatible projection helper (v1 name)."""
+    return project(value, include_names, cap=5, metric_keys=None)
+
+
+SHRINK = (
+    (10, frozenset()),
+    (5, frozenset()),
+    (5, frozenset({"previous", "quality"})),
+    (3, frozenset({"previous", "quality", "comparison"})),
+    (2, frozenset({"previous", "quality", "comparison", "points", "trend"})),
+)
+
+
+def tool_message(evidence, include_names, max_bytes=12000):
+    name = evidence["tool"]
+    keys = None if name in {"calculate_metrics", "compare_periods"} else KEY_METRICS
+    stages = SHRINK[:2] if name in {"calculate_metrics", "compare_periods"} else SHRINK
+    for cap, drop in stages:
+        body = {
+            "evidence_id": evidence["evidence_id"],
+            "tool": name,
+            "args": evidence["args"],
+            "data": project(evidence["payload"], include_names, cap, keys, drop=drop),
+        }
+        text = json.dumps(body, ensure_ascii=False)
+        if len(text.encode()) <= max_bytes:
+            return text
+    return json.dumps(
+        {
+            "evidence_id": evidence["evidence_id"],
+            "tool": name,
+            "note": "Result too large to show; narrow the arguments.",
+        }
+    )
+
+
+def compact_message(evidence):
+    """Short digest used when older tool results are compacted out of the context."""
+    payload = evidence["payload"]
+    digest_items = []
+    for key in ("items", "points", "gainers", "decliners", "checks"):
+        if isinstance(payload.get(key), list):
+            for i, item in enumerate(payload[key][:3]):
+                entry = {"path": f"{key}.{i}"}
+                for field in ("sku", "start", "code", "state"):
+                    if field in item:
+                        entry[field] = item[field]
+                digest_items.append(entry)
+    return json.dumps(
+        {
+            "evidence_id": evidence["evidence_id"],
+            "tool": evidence["tool"],
+            "compacted": True,
+            "first_items": digest_items[:6],
+        },
+        ensure_ascii=False,
+    )
+
+
+def fact(evidence_id, period, key, metric, language="zh"):
+    fmt = {"minor_currency": "money", "count": "count", "ratio": "percent"}[metric["unit"]]
+    label = GRAMMAR_LABELS["metric"][language][key]
+    if language == "en":
+        name = "current" if period == "current" else "comparison"
+        template = f"{label[0].upper() + label[1:]} in the {name} period: {{{{value}}}}."
+    else:
+        template = ("本期" if period == "current" else "比较期") + label + "为 {{value}}。"
+    return {
+        "template": template,
+        "bindings": [
+            {
+                "name": "value",
+                "evidence_id": evidence_id,
+                "path": f"{period}.metrics.{key}",
+                "format": fmt,
+            }
+        ],
+    }
+
+
+def metric_facts(evidence, language="zh"):
     facts = []
     for ev in evidence:
         if ev["tool"] != "calculate_metrics":
             continue
-        for period, prefix in (("current", "本期"), ("previous", "比较期")):
+        for period in ("current", "previous"):
             data = ev["payload"].get(period)
             if not data:
                 continue
-            for key, label in LABELS.items():
+            for key in LABELS:
                 metric = data["metrics"][key]
                 if metric["value"] is None:
                     continue
-                fmt = {"minor_currency": "money", "count": "count", "ratio": "percent"}[
-                    metric["unit"]
-                ]
-                facts.append(
-                    {
-                        "text_template": prefix + label + "为 {{value}}。",
-                        "bindings": {
-                            "value": {
-                                "evidence_id": ev["evidence_id"],
-                                "path": f"{period}.metrics.{key}",
-                                "format": fmt,
-                            }
-                        },
-                    }
-                )
+                facts.append(fact(ev["evidence_id"], period, key, metric, language))
     return facts
 
 
-def topic_facts(evidence, intent):
-    keys = {
-        "refund_review": ("refund_amount", "refund_amount_rate", "gross_sales", "net_sales"),
-        "profit_review": ("gross_profit", "gross_margin", "net_cogs", "net_sales"),
-    }.get(intent, ("net_sales", "paid_orders", "aov", "gross_profit"))
-    facts = metric_facts(evidence)
+TOPIC_KEYS = {
+    "refund_review": ("refund_amount", "refund_amount_rate", "gross_sales", "net_sales"),
+    "profit_review": ("gross_profit", "gross_margin", "net_cogs", "net_sales"),
+}
+
+
+def topic_facts(evidence, intent, language="zh"):
+    keys = TOPIC_KEYS.get(intent, ("net_sales", "paid_orders", "aov", "gross_profit"))
+    facts = metric_facts(evidence, language)
     return [
-        fact
-        for key in keys
-        for fact in facts
-        if fact["bindings"]["value"]["path"] == f"current.metrics.{key}"
+        f for key in keys for f in facts if f["bindings"][0]["path"] == f"current.metrics.{key}"
     ]

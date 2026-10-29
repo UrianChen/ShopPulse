@@ -1,14 +1,18 @@
-import hashlib
+import json
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, Header, Request
-from sqlalchemy import func, select, text
+from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import WorkspaceContext, current_workspace, envelope, mutation_workspace
 from app.api.imports import scoped
 from app.core.errors import AppError
+from app.db import session as db_module
 from app.db.models import (
+    ActionItem,
     AgentRun,
     DatasetVersion,
     Job,
@@ -20,25 +24,14 @@ from app.db.models import (
 from app.db.session import db_session
 from app.metrics.service import request_snapshot
 from app.providers.credentials import lock_configs
+from app.reports import creation
 from app.reports.schema import QuestionInput, ReportInput
-from app.reports.tools import digest
 
 router = APIRouter(prefix="/api/v1/reports")
 
 
 def idempotency(db, actor, route, key, payload):
-    token = "report:" + hashlib.sha256(f"{route}:{key}".encode()).hexdigest()
-    lock = int(hashlib.sha256(f"{actor.workspace_id}:{token}".encode()).hexdigest()[:15], 16)
-    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock})
-    job = db.scalar(
-        select(Job).where(Job.workspace_id == actor.workspace_id, Job.idempotency_key == token)
-    )
-    hashed = digest(payload)
-    if job and job.request_hash != hashed:
-        raise AppError(409, "IDEMPOTENCY_CONFLICT", "相同幂等键不能用于不同请求。")
-    if job and job.error_code == "RESOURCE_DELETED":
-        raise AppError(410, "RESOURCE_DELETED", "此请求关联的数据已删除，请创建新请求。")
-    return job, token, hashed
+    return creation.idempotency(db, actor.workspace_id, route, key, payload)
 
 
 def public(db, report, detail=False):
@@ -58,6 +51,8 @@ def public(db, report, detail=False):
         "job_status": job.status,
         "error_code": job.error_code,
         "generation_mode": report.content.get("generation_mode") if report.content else None,
+        "language": report.language,
+        "schedule_id": str(report.schedule_id) if report.schedule_id else None,
         "created_at": report.created_at,
     }
     if detail:
@@ -96,57 +91,10 @@ def create(
     model = (
         scoped(db, ModelConfig, payload.model_config_id, actor) if payload.model_config_id else None
     )
-    frozen = (
-        {
-            field: getattr(model, field)
-            for field in (
-                "name",
-                "base_url",
-                "model_name",
-                "revision",
-                "timeout_seconds",
-                "token_limit_parameter",
-                "product_name_mode",
-                "capabilities",
-                "consent",
-            )
-        }
-        if model
-        else None
+    parent = scoped(db, Report, payload.parent_id, actor, lock=True) if payload.parent_id else None
+    report = creation.build_report(
+        db, actor.workspace_id, payload, dataset, cached, model, parent, token, hashed
     )
-    report_id, series_id, revision = uuid.uuid4(), uuid.uuid4(), 1
-    if payload.parent_id:
-        parent = scoped(db, Report, payload.parent_id, actor, lock=True)
-        series_id = parent.series_id
-        # Shared config lock serializes all revisions, including branches from different parents.
-        revision = (
-            db.scalar(select(func.max(Report.revision)).where(Report.series_id == series_id)) + 1
-        )
-    job = Job(
-        workspace_id=actor.workspace_id,
-        type="build_report",
-        payload={"report_id": str(report_id)},
-        request_hash=hashed,
-        idempotency_key=token,
-    )
-    db.add(job)
-    db.flush()
-    report = Report(
-        id=report_id,
-        workspace_id=actor.workspace_id,
-        dataset_id=dataset.id,
-        metric_snapshot_id=cached.id,
-        model_config_id=model.id if model else None,
-        model_snapshot=frozen,
-        series_id=series_id,
-        parent_id=payload.parent_id,
-        revision=revision,
-        title=payload.title,
-        query=cached.query,
-        rules=payload.rules.model_dump(),
-        job_id=job.id,
-    )
-    db.add(report)
     db.commit()
     return envelope(request, public(db, report))
 
@@ -213,11 +161,91 @@ def runs(
                 "usage": r.usage,
                 "budgets": r.budgets,
                 "error_code": r.error_code,
+                "trace_id": r.trace_id,
+                "debug_entries": len(r.debug or []),
                 "created_at": r.created_at,
                 "completed_at": r.completed_at,
             }
             for r in rows
         ],
+    )
+
+
+def action_data(item):
+    return {
+        "id": str(item.id),
+        "report_id": str(item.report_id),
+        "position": item.position,
+        "text": item.text,
+        "verification_metric": item.verification_metric,
+        "review_window": item.review_window,
+        "priority": item.priority,
+        "effort": item.effort,
+        "status": item.status,
+        "note": item.note,
+        "evaluation": item.evaluation,
+        "revision": item.revision,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
+
+
+@router.get("/{report_id}/actions")
+def actions(
+    report_id: uuid.UUID,
+    request: Request,
+    actor: WorkspaceContext = Depends(current_workspace),
+    db: Session = Depends(db_session),
+):
+    scoped(db, Report, report_id, actor)
+    rows = db.scalars(
+        select(ActionItem).where(ActionItem.report_id == report_id).order_by(ActionItem.position)
+    )
+    return envelope(request, [action_data(r) for r in rows])
+
+
+def run_events(run_id, start, deadline_seconds=600, interval=1.0):
+    """Server-sent events with the run's trajectory; ends when the run settles."""
+    sent, last_ping = start, time.monotonic()
+    deadline = time.monotonic() + deadline_seconds
+    while time.monotonic() < deadline:
+        with Session(db_module.engine()) as db:
+            run = db.get(AgentRun, run_id)
+            if run is None:
+                return
+            steps, status = list(run.steps or []), run.status
+        for index in range(sent, len(steps)):
+            payload = json.dumps({"index": index, "step": steps[index]}, ensure_ascii=False)
+            yield f"event: step\ndata: {payload}\n\n"
+        sent = max(sent, len(steps))
+        if status not in {"computing", "analyzing"}:
+            yield f"event: done\ndata: {json.dumps({'status': status})}\n\n"
+            return
+        if time.monotonic() - last_ping > 10:
+            last_ping = time.monotonic()
+            yield ": ping\n\n"
+        time.sleep(interval)
+    yield "event: timeout\ndata: {}\n\n"
+
+
+@router.get("/{report_id}/runs/{run_id}/events")
+def events(
+    report_id: uuid.UUID,
+    run_id: uuid.UUID,
+    after: int = 0,
+    actor: WorkspaceContext = Depends(current_workspace),
+    db: Session = Depends(db_session),
+):
+    scoped(db, Report, report_id, actor)
+    run = db.scalar(select(AgentRun).where(AgentRun.id == run_id, AgentRun.report_id == report_id))
+    if run is None:
+        raise AppError(404, "NOT_FOUND", "运行记录不存在。")
+    if after < 0:
+        raise AppError(422, "INVALID_PAGE", "参数无效。")
+    return StreamingResponse(
+        run_events(run.id, after),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

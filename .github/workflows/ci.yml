@@ -29,6 +29,9 @@ jobs:
         working-directory: backend
       - run: uv run alembic upgrade head && uv run alembic check && uv run pytest -q --cov=app.metrics --cov=app.ingestion.normalize --cov-branch --cov-report=json:coverage.json && uv run python ../scripts/check_coverage.py coverage.json
         working-directory: backend
+      - name: Offline agent evaluation gate
+        run: uv run python -m app.evals run --gate --out ../.cache/evals/ci-offline.json
+        working-directory: backend
       - run: docker compose -f compose.dev.yaml down
         if: always()
   frontend:
