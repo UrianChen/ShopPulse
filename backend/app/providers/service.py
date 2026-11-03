@@ -56,6 +56,7 @@ def execute(job):
                 "base_url",
                 "model_name",
                 "protocol",
+                "review_model_name",
                 "timeout_seconds",
                 "token_limit_parameter",
             )

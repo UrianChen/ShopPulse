@@ -8,6 +8,11 @@ Neutral entries:
 
 Assistant turns are replayed from ``raw`` when available so the conversation stays append-only
 (Anthropic binds thinking blocks to the exact history that produced them).
+
+With ``cache=True`` Anthropic requests mark two prompt-cache breakpoints: after the tools and the
+system prompt (identical across reports), and after the first user message, which carries the
+report's evidence and stays the first message of every request in a run. OpenAI services cache
+stable prefixes automatically; the conversation keeps system and evidence first for that too.
 """
 
 import json
@@ -16,7 +21,9 @@ from app.providers.egress import ProviderError
 
 PROTOCOLS = ("openai_chat", "openai_responses", "anthropic_messages")
 ANTHROPIC_VERSION = "2026-10-21"
-ANTHROPIC_MAX_TOKENS = 8000
+# Anthropic requires an output limit. Adaptive thinking counts toward it, and a long report plus
+# thinking can pass 8000; only produced tokens are billed, so the ceiling is generous.
+ANTHROPIC_MAX_TOKENS = 16000
 ENDPOINTS = {
     "openai_chat": "/chat/completions",
     "openai_responses": "/responses",
@@ -151,7 +158,12 @@ def _responses(model, messages, tools, tool_choice, output, max_tokens, token_pa
     return payload
 
 
-def _anthropic(model, messages, tools, tool_choice, output, max_tokens, token_parameter):
+EPHEMERAL = {"type": "ephemeral"}
+
+
+def _anthropic(
+    model, messages, tools, tool_choice, output, max_tokens, token_parameter, cache=False
+):
     system, wire = [], []
     pending = []
 
@@ -187,13 +199,21 @@ def _anthropic(model, messages, tools, tool_choice, output, max_tokens, token_pa
         else:
             wire.append({"role": "user", "content": m["content"]})
     flush()
+    if cache and wire and wire[0]["role"] == "user" and isinstance(wire[0]["content"], str):
+        wire[0] = {
+            "role": "user",
+            "content": [{"type": "text", "text": wire[0]["content"], "cache_control": EPHEMERAL}],
+        }
     payload = {
         "model": model,
         "max_tokens": max_tokens if token_parameter != "none" else ANTHROPIC_MAX_TOKENS,
         "messages": wire,
     }
     if system:
-        payload["system"] = "\n\n".join(system)
+        text = "\n\n".join(system)
+        payload["system"] = (
+            [{"type": "text", "text": text, "cache_control": EPHEMERAL}] if cache else text
+        )
     if tools:
         payload["tools"] = [
             {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
@@ -223,9 +243,14 @@ def build(
     output=None,
     max_tokens=1500,
     token_parameter="none",
+    cache=False,
 ):
     if protocol not in BUILDERS:
         raise ProviderError("UNSUPPORTED_REQUEST")
+    if protocol == "anthropic_messages":
+        return _anthropic(
+            model, messages, tools, tool_choice, output, max_tokens, token_parameter, cache
+        )
     return BUILDERS[protocol](
         model, messages, tools, tool_choice, output, max_tokens, token_parameter
     )
@@ -266,6 +291,8 @@ def _parse_chat(body):
         raise ProviderError("INVALID_RESPONSE") from None
     if value.get("refusal"):
         raise ProviderError("MODEL_REFUSED")
+    if choice.get("finish_reason") == "length":
+        raise ProviderError("OUTPUT_TRUNCATED")
     if choice.get("finish_reason") not in {"stop", "tool_calls"}:
         raise ProviderError("INVALID_RESPONSE")
     calls = []
@@ -285,6 +312,7 @@ def _parse_chat(body):
         "usage": {
             "input_tokens": _int(usage.get("prompt_tokens")),
             "output_tokens": _int(usage.get("completion_tokens")),
+            "cached_tokens": _int((usage.get("prompt_tokens_details") or {}).get("cached_tokens")),
         },
         # Only what the loop consumes counts toward the output budget; provider extras such as
         # ``reasoning_content`` can be several times larger than the answer itself.
@@ -337,6 +365,7 @@ def _parse_responses(body):
         "usage": {
             "input_tokens": _int(usage.get("input_tokens")),
             "output_tokens": _int(usage.get("output_tokens")),
+            "cached_tokens": _int((usage.get("input_tokens_details") or {}).get("cached_tokens")),
         },
         "visible": {"text": "".join(texts), "calls": calls},
     }
@@ -348,6 +377,8 @@ def _parse_anthropic(body):
     reason = body.get("stop_reason")
     if reason == "refusal":
         raise ProviderError("MODEL_REFUSED")
+    if reason == "max_tokens":
+        raise ProviderError("OUTPUT_TRUNCATED")
     if reason not in {"end_turn", "tool_use", "stop_sequence"}:
         raise ProviderError("INVALID_RESPONSE")
     content = body.get("content")
@@ -372,6 +403,7 @@ def _parse_anthropic(body):
             + _int(usage.get("cache_read_input_tokens"))
             + _int(usage.get("cache_creation_input_tokens")),
             "output_tokens": _int(usage.get("output_tokens")),
+            "cached_tokens": _int(usage.get("cache_read_input_tokens")),
         },
         "visible": {"text": "".join(texts), "calls": calls},
     }

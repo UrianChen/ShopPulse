@@ -49,6 +49,8 @@ def create(client, **overrides):
 
 def test_credentials_crud_revision_and_default(api_client, db):
     item = create(api_client, is_default=True)
+    # Thinking models with a 16,000-token output ceiling outlast the old 45-second default.
+    assert item["timeout_seconds"] == 120
     path = "/api/v1/model-configs/" + item["id"]
     record = db.get(ModelConfig, uuid.UUID(item["id"]))
     assert KEY not in record.credential_ciphertext and decrypt(record) == KEY
@@ -428,3 +430,31 @@ def test_v1_consent_is_flagged_and_confirmed_without_new_revision(api_client, db
     assert data["consent"]["revision"] == data["revision"]
     assert data["capabilities"] == {"usable": True, "strategy": "native_tools"}
     assert KEY not in confirmed.text
+
+
+def test_review_model_probe_records_stage_and_never_blocks_main(api_client, db, provider):
+    config = {"base_url": provider, "model_name": "full", "timeout_seconds": 5}
+    plain = service.probe(config, KEY)
+    assert "review" not in plain["stages"] and plain["review_usable"] is False
+    ok = service.probe({**config, "review_model_name": "full"}, KEY)
+    assert ok["review_usable"] is True and ok["stages"]["review"]["ok"]
+    assert ok["requests"] == plain["requests"] + 1
+    # Narrative main models have no JSON mode: the review probe falls back to plain text.
+    text = service.probe({**config, "model_name": "text-json", "review_model_name": "full"}, KEY)
+    assert text["review_usable"] is True and text["strategy"] == "restricted_json"
+    for review in ("no-review", "auth-fail"):
+        failed = service.probe({**config, "review_model_name": review}, KEY)
+        assert failed["usable"] and failed["strategy"] == "native_tools"
+        assert failed["review_usable"] is False and not failed["stages"]["review"]["ok"]
+    assert failed["stages"]["review"]["code"] == "AUTH_FAILED"
+    # Through the job: the review stage is persisted, and its failure leaves the config usable.
+    item = create(api_client, base_url=provider)
+    db.get(ModelConfig, uuid.UUID(item["id"])).review_model_name = "no-review"
+    db.commit()
+    job_id = api_client.post(f"/api/v1/model-configs/{item['id']}/test").json()["data"]["job_id"]
+    service.execute(claim())
+    assert api_client.get("/api/v1/jobs/" + job_id).json()["data"]["status"] == "succeeded"
+    db.expire_all()
+    capabilities = db.get(ModelConfig, uuid.UUID(item["id"])).capabilities
+    assert capabilities["usable"] and capabilities["review_usable"] is False
+    assert capabilities["stages"]["review"]["code"] == "UNSUPPORTED_REQUEST"

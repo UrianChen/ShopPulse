@@ -15,6 +15,7 @@ MESSAGES = {
     "PROVIDER_REJECTED": "模型服务拒绝了请求。",
     "MODEL_REFUSED": "模型拒绝回答此请求。",
     "INVALID_RESPONSE": "服务响应未通过格式校验。",
+    "OUTPUT_TRUNCATED": "模型输出达到长度上限被截断，请稍后重试。",
     "INVALID_BASE_URL": "请填写 API 根地址，不含凭证、查询参数或具体接口路径。",
     "INVALID_WEBHOOK_URL": "请填写完整的 HTTPS 通知地址，不含账号密码。",
     "WEBHOOK_REJECTED": "通知地址拒绝了请求。",
@@ -190,6 +191,32 @@ class ProviderAdapter:
             lambda: json_probe({"type": "json_schema", "name": "probe", "schema": PROBE_SCHEMA}),
         )
         text_json = native_json or json_schema or run("text_json", lambda: json_probe(None))
+        review = self.config.get("review_model_name")
+        review_usable = False
+        if review:
+            # Same request shape the workflow's review call uses; a failure only disables review.
+            reviewer = ProviderAdapter(
+                {**self.config, "model_name": review}, self.key, self.transport
+            )
+            reviewer.deadline = self.deadline
+            output = (
+                {"type": "json_schema", "name": "probe", "schema": PROBE_SCHEMA}
+                if json_schema
+                else {"type": "json_object"}
+                if native_json
+                else None
+            )
+
+            def review_probe():
+                try:
+                    value = json.loads(text_of(reviewer.complete(json_messages, output=output)))
+                    if not isinstance(value, dict) or value.get("ok") is not True:
+                        raise ValueError
+                except (ValueError, TypeError):
+                    raise ProviderError("INVALID_RESPONSE") from None
+
+            review_usable = run("review", review_probe)
+            self.requests += reviewer.requests
         return {
             "usable": True,
             "protocol": self.protocol,
@@ -202,6 +229,7 @@ class ProviderAdapter:
             "native_json": native_json,
             "json_schema": json_schema,
             "text_json": text_json,
+            "review_usable": review_usable,
             "stages": stages,
             "requests": self.requests,
         }

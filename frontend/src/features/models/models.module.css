@@ -1,0 +1,228 @@
+.model-result {
+  padding: var(--space-16);
+  background: var(--color-page);
+}
+.model-result.usable {
+  background: var(--color-sage-96);
+}
+.model-result strong {
+  color: var(--color-green-36);
+}
+.model-card-title h2 {
+  font-size: 20px;
+}
+.model-card-title p,
+.model-meta,
+.model-result small {
+  color: var(--color-sage-47-2);
+}
+.model-meta {
+  font-size: 14px;
+}
+.model-consent {
+  background: var(--color-soft);
+  color: var(--color-green-37);
+}
+.model-consent p {
+  color: var(--color-green-46-4);
+  font-size: 15px;
+}
+.model-editor {
+  max-width: 960px;
+}
+.capability-list > div {
+  font-size: 15px;
+}
+.passed {
+  color: var(--color-green-43);
+}
+.limited {
+  color: var(--color-amber-44-2);
+}
+.capability-details {
+  margin-top: var(--space-12);
+}
+.capability-details summary {
+  color: var(--color-green-45);
+  font-size: 14px;
+}
+.models-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-24);
+}
+.model-card {
+  min-width: 0;
+}
+.model-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-14);
+}
+.model-card-title > div {
+  min-width: 0;
+  flex: 1;
+}
+.model-card-title h2 {
+  font-size: 19px;
+  overflow-wrap: anywhere;
+}
+.model-card-title p {
+  font-size: 14px;
+  color: var(--color-sage-45-3);
+  margin-top: var(--space-6);
+  overflow-wrap: anywhere;
+}
+.model-url {
+  font-size: 14px;
+  color: var(--color-sage-45-2);
+  overflow-wrap: anywhere;
+  margin: var(--space-20) 0 var(--space-14);
+}
+.model-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-15);
+  color: var(--color-sage-45-3);
+  font-size: 14px;
+}
+.model-meta > span {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+.model-result {
+  margin-top: var(--space-22);
+  padding: var(--space-18);
+  background: var(--color-page);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-9);
+  color: var(--color-sage-45-3);
+}
+.model-result.usable {
+  background: var(--color-soft);
+}
+.model-result > strong {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: 15px;
+}
+.model-result > p {
+  font-size: 14px;
+  line-height: 1.8;
+  margin-top: var(--space-12);
+}
+.model-result small {
+  display: block;
+  font-size: 14px;
+  margin-top: var(--space-14);
+  color: var(--color-sage-45-3);
+}
+.capability-list {
+  margin-top: var(--space-14);
+}
+.capability-list > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  padding: var(--space-9) 0;
+  border-top: 1px solid var(--color-sage-92);
+  gap: var(--space-7);
+  font-size: 14px;
+}
+.capability-list p {
+  width: 100%;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--color-sage-45-3);
+}
+.passed {
+  color: var(--color-green-47);
+}
+.limited {
+  color: var(--color-sage-45-3);
+}
+.model-editor {
+  margin-bottom: var(--space-24);
+}
+.model-editor fieldset {
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.model-consent {
+  display: flex;
+  gap: var(--space-14);
+  background: var(--color-page);
+  padding: var(--space-20);
+  border: 1px solid var(--color-sage-92);
+  border-radius: var(--radius-9);
+  margin-top: var(--space-22);
+}
+.model-consent > svg {
+  flex-shrink: 0;
+  color: var(--color-sage-45-3);
+}
+.model-consent > div {
+  min-width: 0;
+}
+.model-consent strong {
+  font-size: 15px;
+  color: var(--color-green-48);
+}
+.model-consent p {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--color-sage-45-3);
+  margin-top: var(--space-10);
+  overflow-wrap: anywhere;
+}
+.model-consent .check-field {
+  margin-bottom: 0;
+}
+.model-empty {
+  text-align: center;
+  padding: 55px var(--space-20);
+  color: var(--color-sage-45-3);
+}
+.model-empty > svg {
+  margin-bottom: var(--space-18);
+}
+.model-empty h2 {
+  font-size: 22px;
+}
+.model-empty p {
+  font-size: 15px;
+  line-height: 1.9;
+  margin: var(--space-16) 0 var(--space-24);
+  color: var(--color-sage-45-3);
+}
+.model-empty button {
+  margin: auto;
+}
+.delete-confirm {
+  border-top: 1px solid var(--color-sage-92);
+  margin-top: var(--space-20);
+  padding-top: var(--space-14);
+}
+.delete-confirm p {
+  font-size: 14px;
+  margin-bottom: var(--space-12);
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.delete-confirm button {
+  margin-right: var(--space-14);
+}
+@media (max-width: 1100px) {
+  .models-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.consent-upgrade {
+  margin: var(--space-12) 0;
+}
+.consent-upgrade p {
+  margin: var(--space-4) 0 var(--space-8);
+}

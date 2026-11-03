@@ -3,10 +3,12 @@ from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.api import responses as out
 from app.api.dependencies import WorkspaceContext, current_workspace, envelope, mutation_workspace
 from app.api.imports import scoped
 from app.api.reports import action_data
@@ -30,7 +32,7 @@ from app.providers.credentials import seal
 from app.providers.egress import ProviderError, normalize_webhook_url
 from app.reports.schema import Rules
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", default_response_class=JSONResponse)
 
 
 class ScheduleInput(BaseModel):
@@ -139,7 +141,7 @@ def apply_schedule(db, item, values, actor, workspace):
     item.updated_at = now()
 
 
-@router.get("/schedules")
+@router.get("/schedules", response_model=out.Envelope[list[out.Schedule]])
 def schedules(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -154,7 +156,7 @@ def schedules(
     return envelope(request, [schedule_data(db, r, workspace) for r in rows])
 
 
-@router.post("/schedules", status_code=201)
+@router.post("/schedules", status_code=201, response_model=out.Envelope[out.Schedule])
 def create_schedule(
     payload: ScheduleInput,
     request: Request,
@@ -181,7 +183,7 @@ def create_schedule(
     return envelope(request, schedule_data(db, item, workspace))
 
 
-@router.patch("/schedules/{schedule_id}")
+@router.patch("/schedules/{schedule_id}", response_model=out.Envelope[out.Schedule])
 def patch_schedule(
     schedule_id: uuid.UUID,
     payload: SchedulePatch,
@@ -216,7 +218,11 @@ def delete_schedule(
     db.commit()
 
 
-@router.post("/schedules/{schedule_id}/run", status_code=202)
+@router.post(
+    "/schedules/{schedule_id}/run",
+    status_code=202,
+    response_model=out.Envelope[out.ScheduleRun],
+)
 def run_now(
     schedule_id: uuid.UUID,
     request: Request,
@@ -256,7 +262,7 @@ def note_data(item):
     }
 
 
-@router.get("/notes")
+@router.get("/notes", response_model=out.Envelope[list[out.Note]])
 def notes(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -271,7 +277,7 @@ def notes(
     return envelope(request, [note_data(r) for r in rows])
 
 
-@router.post("/notes", status_code=201)
+@router.post("/notes", status_code=201, response_model=out.Envelope[out.Note])
 def create_note(
     payload: NoteInput,
     request: Request,
@@ -292,7 +298,7 @@ def create_note(
     return envelope(request, note_data(item))
 
 
-@router.put("/notes/{note_id}")
+@router.put("/notes/{note_id}", response_model=out.Envelope[out.Note])
 def update_note(
     note_id: uuid.UUID,
     payload: NoteInput,
@@ -327,7 +333,7 @@ class ActionPatch(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
-@router.get("/actions")
+@router.get("/actions", response_model=out.Envelope[out.Page[out.WorkspaceAction]])
 def actions(
     request: Request,
     status: Literal["open", "done", "dismissed", "all"] = "open",
@@ -352,7 +358,7 @@ def actions(
     return envelope(request, {"total": total, "items": items})
 
 
-@router.patch("/actions/{action_id}")
+@router.patch("/actions/{action_id}", response_model=out.Envelope[out.ActionItem])
 def patch_action(
     action_id: uuid.UUID,
     payload: ActionPatch,

@@ -17,6 +17,9 @@ ROUTES = {
 NO_TOOLS = {"no-tools", "text-json", "narrative"}
 NO_JSON_MODE = {"text-json", "narrative"}
 NO_SCHEMA = {"text-json", "narrative", "no-tools"}
+# Usable as a main model's name, but rejects every structured request: as a review model its
+# connection probe fails, so the review pass must stay off.
+NO_REVIEW = "no-review"
 
 
 class Unsupported(Exception):
@@ -112,7 +115,10 @@ def to_neutral(protocol, payload):
         if not isinstance(payload.get("max_tokens"), int):
             raise Unsupported
         if payload.get("system"):
-            messages.append({"role": "system", "content": payload["system"]})
+            system = payload["system"]
+            if isinstance(system, list):
+                system = "\n\n".join(b.get("text", "") for b in system if isinstance(b, dict))
+            messages.append({"role": "system", "content": system})
         for m in payload.get("messages") or []:
             content = m.get("content")
             if m.get("role") == "assistant":
@@ -218,6 +224,17 @@ def from_neutral(protocol, content, calls, usage=(120, 40)):
 
 
 # --------------------------------------------------------------------------- scripted agent
+def phase_message(message):
+    """Hypothesis-phase messages are JSON objects with a "phase" key."""
+    if message["role"] != "user":
+        return None
+    try:
+        data = json.loads(message.get("content") or "")
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) and "phase" in data and "kind" not in data else None
+
+
 def tool_results(messages):
     found = []
     for m in messages:
@@ -228,7 +245,133 @@ def tool_results(messages):
                 pass
         elif m["role"] == "user" and str(m.get("content", "")).startswith("Tool results DATA: "):
             found += json.loads(m["content"][len("Tool results DATA: ") :])
+        elif phase_message(m):
+            for result in phase_message(m).get("results") or []:
+                if result.get("test"):
+                    found.append(result["test"])
     return found
+
+
+def verdicts(messages):
+    """Hypothesis verdicts the conversation has seen (server-seeded and tested)."""
+    data = json.loads(messages[1]["content"])
+    found = list(data.get("hypotheses") or [])
+    for m in messages:
+        for result in (phase_message(m) or {}).get("results") or []:
+            if result.get("verdict"):
+                found.append(result["verdict"])
+    return found
+
+
+def operand(source, path, select=None):
+    return {"source": source, "path": path, "select": select}
+
+
+def hypothesis(identifier, template, tool, arguments, op, a, b=None, threshold=None, k=None):
+    fields = ("metric", "direction", "top_k", "start", "end_exclusive", "metrics", "sku", "by")
+    return {
+        "id": identifier,
+        "statement": {"template": template, "bindings": []},
+        "test": {"tool": tool, "arguments": {f: arguments.get(f) for f in fields}},
+        "expect": {"op": op, "a": a, "b": b, "threshold": threshold, "k": k},
+    }
+
+
+def plan_reply(model, data, messages, phase):
+    """Scripted hypothesis plans for the mock models."""
+    english = data.get("language") == "en"
+    metrics = next((e for e in data["evidence"] if e["tool"] == "calculate_metrics"), None)
+    if phase == "plan" and model == "agent":
+        return [
+            hypothesis(
+                "h_refund_top",
+                "Refunds sit mainly with one product."
+                if english
+                else "累计退款主要集中在单个商品上。",
+                "refund_breakdown",
+                {"by": "sku"},
+                "share_ge",
+                operand("test", "items.0.metrics.refund_amount"),
+                operand("test", "total.metrics.refund_amount"),
+                "0.3",
+            ),
+            hypothesis(
+                "h_top_seller",
+                "The best seller carries a large share of sales."
+                if english
+                else "销量最高的商品贡献了较大份额的净销售额。",
+                "rank_products",
+                {"metric": "net_sales", "direction": "desc", "top_k": 3},
+                "share_ge",
+                operand("test", "items.0.current.metrics.net_sales"),
+                operand(metrics["evidence_id"], "current.metrics.net_sales"),
+                "0.05",
+            ),
+        ]
+    if phase == "refine" and model == "agent":
+        refunds = next(
+            (r for r in tool_results(messages) if r.get("tool") == "refund_breakdown"), {}
+        )
+        items = (refunds.get("data") or {}).get("items") or []
+        if items:
+            return [
+                hypothesis(
+                    "h_refund_sku_up",
+                    "Refunds on this product rose against the comparison period."
+                    if english
+                    else "该商品的退款较比较期增加。",
+                    "inspect_sku",
+                    {"sku": items[0]["sku"]},
+                    "gt",
+                    operand("test", "comparison.refund_amount.delta"),
+                )
+            ]
+        return []
+    if phase == "plan" and model == "unsafe-tool":
+        # The test tool is not a ShopPulse tool: the server must refuse to run it.
+        return [
+            hypothesis(
+                "h_sql",
+                "Unsafe test." if english else "不安全的检验。",
+                "execute_sql",
+                {},
+                "gt",
+                operand("test", "comparison.net_sales.delta"),
+            )
+        ]
+    if phase == "plan" and model in {"full", "no-tools", "text-json"}:
+        return [
+            hypothesis(
+                "h_top_seller",
+                "The best seller carries a large share of sales."
+                if english
+                else "销量最高的商品贡献了较大份额的净销售额。",
+                "rank_products",
+                {"metric": "net_sales", "direction": "desc", "top_k": 3},
+                "share_ge",
+                operand("test", "items.0.current.metrics.net_sales"),
+                operand(metrics["evidence_id"], "current.metrics.net_sales"),
+                "0.05",
+            )
+        ]
+    return []
+
+
+def patch_reply(model, data, messages):
+    """Answer a patch request: replace each listed sentence with the first fact example."""
+    text = str(messages[-1].get("content") or "")
+    fact = dict(data["fact_examples"][0])
+    if model == "bad-number":
+        fact["template"] = "销售额是 999999 元。"
+    patches = []
+    for line in text.split("Locations to patch:", 1)[-1].splitlines():
+        line = line.strip()
+        if not line.startswith("- ") or ": " not in line:
+            continue
+        at, kind = line[2:].split(": ", 1)
+        if kind == "a Sentence":
+            patches.append({"at": at, "sentence": fact, "text": None, "ids": None})
+    return {"patches": patches}
 
 
 def sentence(template, *bindings):
@@ -284,7 +427,7 @@ def entity_sentences(results, language):
     return None, None
 
 
-def final_report(model, data, results, repaired):
+def final_report(model, data, results, repaired, tested=()):
     language = data.get("language", "zh")
     fact = data["fact_examples"][0]
     if model == "foreign-evidence":
@@ -297,6 +440,8 @@ def final_report(model, data, results, repaired):
         if language == "en"
         else "可能与商品结构和退款分布有关，需核查明细"
     )
+    supported = [v["id"] for v in tested if v.get("state") == "supported"][:2]
+    refuted = [v["id"] for v in tested if v.get("state") == "refuted"][:1]
     if support:
         template = (
             "Review refund reasons and cost records for {{sku}}."
@@ -320,7 +465,19 @@ def final_report(model, data, results, repaired):
                 "observation": fact,
                 "supporting": [support] if support else [],
                 "hypotheses": [sentence(hypothesis)],
+                "hypothesis_ids": supported,
             }
+        ],
+        "ruled_out": [
+            {
+                "hypothesis_id": refuted_id,
+                "sentence": sentence(
+                    "The data does not support this explanation."
+                    if language == "en"
+                    else "数据不支持该解释。"
+                ),
+            }
+            for refuted_id in refuted
         ],
         "recommendations": [
             {
@@ -401,12 +558,27 @@ def agent_turn(model, messages, flags):
     )
     closed = any("Tools are now closed" in str(m.get("content") or "") for m in messages)
     final = (
-        final_report(model, data, results, repaired)
+        final_report(model, data, results, repaired, verdicts(messages))
         if data["kind"] == "report"
         else final_answer(model, data, results)
     )
     if model == "malformed-report":
         return "not JSON", []
+    last = messages[-1]
+    if last["role"] == "user" and "Return only patches" in str(last.get("content") or ""):
+        return json.dumps(patch_reply(model, data, messages), ensure_ascii=False), []
+    phase = phase_message(last)
+    if phase is None and data.get("phase") == "plan" and len(messages) == 2:
+        phase = {"phase": "plan"}
+    elif (
+        phase is None
+        and data.get("phase") == "plan"
+        and "hypothesis plan was not valid" in str(last.get("content") or "")
+    ):
+        phase = {"phase": "plan"}
+    if phase is not None and phase["phase"] in {"plan", "refine"}:
+        planned = plan_reply(model, data, messages, phase["phase"])
+        return json.dumps({"hypotheses": planned}, ensure_ascii=False), []
     if flags["tools"] and not flags["tool_choice_none"] and not repaired and not closed:
         if model == "unsafe-tool" and rounds == 0:
             return None, [{"id": "call_sql", "name": "execute_sql", "arguments": {"sql": "DROP"}}]
@@ -436,13 +608,16 @@ def agent_turn(model, messages, flags):
                 args = {"metric": "gross_profit", "direction": "asc", "top_k": 3}
                 return None, [{"id": "call_report", "name": "rank_products", "arguments": args}]
             return None, [{"id": "call_question", "name": "refund_breakdown", "arguments": {}}]
-    if model in {"no-tools", "text-json"} and envelope_rounds == 0 and not repaired and not closed:
+    envelope = model in {"no-tools", "text-json"} and not data.get("phase")
+    if envelope and envelope_rounds == 0 and not repaired and not closed:
         return json.dumps({"tools": [{"tool": "rank_products", "arguments": {"top_k": 3}}]}), []
     return json.dumps(final, ensure_ascii=False), []
 
 
 def probe_turn(model, messages, flags):
     last = str(messages[-1].get("content") or "") if messages else ""
+    if model == NO_REVIEW and (flags["json"] or flags["schema"] or "JSON" in last):
+        raise Unsupported
     if flags["tools"]:
         if model in NO_TOOLS:
             raise Unsupported
@@ -481,6 +656,10 @@ def respond(protocol, payload):
             if flags["tools"] and model in NO_TOOLS:
                 raise Unsupported
             content, calls = agent_turn(model, messages, flags)
+        elif "report review" in system:
+            if model == NO_REVIEW:
+                raise Unsupported
+            content, calls = '{"issues":[]}', []
         else:
             content, calls = probe_turn(model, messages, flags)
     except Unsupported:

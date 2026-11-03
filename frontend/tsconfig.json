@@ -16,5 +16,13 @@
     "noUnusedParameters": true,
     "types": ["vite/client", "node"]
   },
-  "include": ["src", "vite.config.ts", "playwright.config.ts", "e2e"]
+  "include": [
+    "src",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "playwright.visual.config.ts",
+    "e2e",
+    "visual"
+  ]
 }

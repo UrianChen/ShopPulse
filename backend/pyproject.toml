@@ -1,6 +1,6 @@
 [project]
 name = "shoppulse-backend"
-version = "2.0.0"
+version = "3.0.0"
 description = "ShopPulse API and durable worker"
 license = "MIT"
 requires-python = ">=3.12,<3.13"

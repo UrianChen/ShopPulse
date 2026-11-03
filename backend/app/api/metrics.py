@@ -2,9 +2,11 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api import responses as out
 from app.api.dependencies import WorkspaceContext, current_workspace, envelope, mutation_workspace
 from app.api.imports import scoped
 from app.core.errors import AppError
@@ -13,7 +15,7 @@ from app.db.session import db_session
 from app.metrics.schema import MetricQuery
 from app.metrics.service import request_snapshot
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", default_response_class=JSONResponse)
 
 
 def public_snapshot(db, value):
@@ -28,7 +30,7 @@ def public_snapshot(db, value):
     }
 
 
-@router.post("/metrics/query")
+@router.post("/metrics/query", response_model=out.Envelope[out.MetricSnapshot])
 def query_metrics(
     payload: MetricQuery,
     request: Request,
@@ -40,7 +42,7 @@ def query_metrics(
     return envelope(request, public_snapshot(db, cached))
 
 
-@router.get("/metrics/{snapshot_id}")
+@router.get("/metrics/{snapshot_id}", response_model=out.Envelope[out.MetricSnapshot])
 def get_metrics(
     snapshot_id: uuid.UUID,
     request: Request,
@@ -51,7 +53,7 @@ def get_metrics(
     return envelope(request, public_snapshot(db, cached))
 
 
-@router.get("/metrics/{snapshot_id}/products")
+@router.get("/metrics/{snapshot_id}/products", response_model=out.Envelope[out.Page[out.Json]])
 def products(
     snapshot_id: uuid.UUID,
     request: Request,
@@ -82,7 +84,7 @@ def products(
     return envelope(request, {"total": total, "items": [r.payload for r in values]})
 
 
-@router.get("/datasets/{dataset_id}/skus")
+@router.get("/datasets/{dataset_id}/skus", response_model=out.Envelope[list[str]])
 def sku_choices(
     dataset_id: uuid.UUID,
     request: Request,

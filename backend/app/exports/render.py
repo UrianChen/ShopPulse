@@ -10,6 +10,7 @@ import io
 import json
 import re
 import zipfile
+from datetime import date, timedelta
 from decimal import Decimal, localcontext
 from html import escape
 from pathlib import Path
@@ -61,6 +62,18 @@ TEXT = {
         "findings": "经营观察与行动建议",
         "recommendations": "建议",
         "hypothesis": "待验证假设：",
+        "supported": "数据支持的假设：",
+        "hypotheses": "假设检验",
+        "hypotheses_text": "每条假设都由服务端运行检验并判定；"
+        "数据支持只表示数据与假设一致，不证明因果。",
+        "ruled_out": "已排除的原因",
+        "recheck": "上期结论复核",
+        "previous_state": "上期结论",
+        "state_now": "本期结论",
+        "statement": "假设",
+        "history": "历史窗口",
+        "window": "窗口",
+        "streak": "净销售额已连续 {} 期{}。",
         "priority": "优先级",
         "effort": "工作量",
         "verification": "验证指标",
@@ -131,6 +144,18 @@ TEXT = {
         "findings": "Findings and recommendations",
         "recommendations": "Recommendations",
         "hypothesis": "Hypothesis to verify: ",
+        "supported": "Supported hypothesis: ",
+        "hypotheses": "Hypothesis tests",
+        "hypotheses_text": "The server runs and judges every hypothesis test. Supported means the "
+        "data is consistent with the hypothesis, not that the cause is proven.",
+        "ruled_out": "Causes ruled out",
+        "recheck": "Earlier hypotheses re-checked",
+        "previous_state": "Earlier verdict",
+        "state_now": "Verdict now",
+        "statement": "Hypothesis",
+        "history": "History windows",
+        "window": "Window",
+        "streak": "Net sales have been {1} for {0} periods in a row.",
         "priority": "Priority",
         "effort": "Effort",
         "verification": "Verification metric",
@@ -429,6 +454,10 @@ def document(content, evidence):
         )
         parts.extend("<p>" + escape(s["text"]) + "</p>" for s in finding.get("supporting") or [])
         parts.extend(
+            f"<p>{words['supported']}" + escape(h["text"] or h["id"]) + "</p>"
+            for h in finding.get("supported_hypotheses") or []
+        )
+        parts.extend(
             f"<p>{words['hypothesis']}" + escape(s) + "</p>" for s in finding["hypotheses"]
         )
         parts.append(
@@ -444,6 +473,49 @@ def document(content, evidence):
             + escape(recommendation_meta(item, language))
             + "</p>"
         )
+    if content.get("hypotheses") or content.get("ruled_out"):
+        parts.append(f"<h2>{words['hypotheses']}</h2><p>{escape(words['hypotheses_text'])}</p><ul>")
+        parts.extend(
+            "<li>" + escape(hypothesis_line(h, language)) + "</li>"
+            for h in content.get("hypotheses") or []
+        )
+        parts.append("</ul>")
+        if content.get("ruled_out"):
+            parts.append(f"<h3>{words['ruled_out']}</h3><ul>")
+            parts.extend(
+                "<li>" + escape((r.get("statement") or "") + " " + r["text"]) + "</li>"
+                for r in content["ruled_out"]
+            )
+            parts.append("</ul>")
+    if content.get("hypothesis_recheck"):
+        parts.append(
+            f"<h2>{words['recheck']}</h2><table><thead><tr>"
+            + "".join(
+                f"<th>{words[key]}</th>" for key in ("statement", "previous_state", "state_now")
+            )
+            + "</tr></thead><tbody>"
+        )
+        for item in content["hypothesis_recheck"]:
+            cells = [
+                item.get("statement") or item["id"],
+                label("hypothesis_state", item["previous_state"], language),
+                label("hypothesis_state", item["state"], language),
+            ]
+            parts.append("<tr><td>" + "</td><td>".join(escape(v) for v in cells) + "</td></tr>")
+        parts.append("</tbody></table>")
+    if (content.get("history") or {}).get("windows"):
+        history = content["history"]
+        parts.append(f"<h2>{words['history']}</h2>")
+        if streak_line(history, language):
+            parts.append('<p class="notice">' + escape(streak_line(history, language)) + "</p>")
+        parts.append(
+            f"<table><thead><tr><th>{words['window']}</th>"
+            + "".join(f"<th>{escape(label('metric', k, language))}</th>" for k in HISTORY_KEYS)
+            + "</tr></thead><tbody>"
+        )
+        for row in history_rows(history, result, language):
+            parts.append("<tr><td>" + "</td><td>".join(escape(v) for v in row) + "</td></tr>")
+        parts.append("</tbody></table>")
     if content.get("action_followups"):
         parts.append(
             f"<h2>{words['followups']}</h2><table><thead><tr>"
@@ -485,6 +557,38 @@ def document(content, evidence):
         + "</pre></details>"
     )
     return "".join(parts)
+
+
+HISTORY_KEYS = ("net_sales", "paid_orders", "aov", "refund_amount_rate")
+
+
+def hypothesis_line(item, language):
+    words = TEXT[language]
+    text = (item.get("statement") or item["id"]) + (
+        words["estimated"] if item.get("quality") == "estimated" else ""
+    )
+    return label("hypothesis_state", item["state"], language) + words["separator"] + text
+
+
+def history_rows(history, result, language):
+    rows = []
+    for window in history["windows"]:
+        end = (date.fromisoformat(window["end_exclusive"]) - timedelta(days=1)).isoformat()
+        values = [
+            money(window["metrics"][key], result, language) if window["coverage_complete"] else "—"
+            for key in HISTORY_KEYS
+        ]
+        rows.append([f"{window['start']} – {end}", *values])
+    return rows
+
+
+def streak_line(history, language):
+    streak = (history.get("streaks") or {}).get("net_sales")
+    if not streak or streak["direction"] == "flat" or streak["periods"] < 2:
+        return None
+    return TEXT[language]["streak"].format(
+        streak["periods"], label("direction", streak["direction"], language)
+    )
 
 
 def followup_row(item, result, language="zh"):
@@ -625,11 +729,51 @@ def markdown_zip(content, evidence):
             safe(f["observation"]["text"]),
             "",
             *[safe(s["text"]) for s in f.get("supporting") or []],
+            *[
+                words["supported"] + safe(h["text"] or h["id"])
+                for h in f.get("supported_hypotheses") or []
+            ],
             *[words["hypothesis"] + safe(h) for h in f["hypotheses"]],
             "",
         ]
     for a in content["recommendations"]:
         lines += [safe(a["action"]), "", safe(recommendation_meta(a, language)), ""]
+    if content.get("hypotheses") or content.get("ruled_out"):
+        lines += [f"## {words['hypotheses']}", "", words["hypotheses_text"], ""]
+        lines += [
+            "- " + safe(hypothesis_line(h, language)) for h in content.get("hypotheses") or []
+        ]
+        lines.append("")
+        if content.get("ruled_out"):
+            lines += [f"### {words['ruled_out']}", ""]
+            lines += [
+                "- " + safe((r.get("statement") or "") + " " + r["text"])
+                for r in content["ruled_out"]
+            ]
+            lines.append("")
+    if content.get("hypothesis_recheck"):
+        headers = [words[k] for k in ("statement", "previous_state", "state_now")]
+        lines += [f"## {words['recheck']}", "", "| " + " | ".join(headers) + " |"]
+        lines.append("| --- | --- | --- |")
+        for item in content["hypothesis_recheck"]:
+            cells = [
+                item.get("statement") or item["id"],
+                label("hypothesis_state", item["previous_state"], language),
+                label("hypothesis_state", item["state"], language),
+            ]
+            lines.append("| " + " | ".join(safe(v) for v in cells) + " |")
+        lines.append("")
+    if (content.get("history") or {}).get("windows"):
+        history = content["history"]
+        lines += [f"## {words['history']}", ""]
+        if streak_line(history, language):
+            lines += [safe(streak_line(history, language)), ""]
+        headers = [words["window"], *[label("metric", k, language) for k in HISTORY_KEYS]]
+        lines += ["| " + " | ".join(safe(h) for h in headers) + " |"]
+        lines.append("| " + " | ".join("---" for _ in headers) + " |")
+        for row in history_rows(history, result, language):
+            lines.append("| " + " | ".join(safe(v) for v in row) + " |")
+        lines.append("")
     if content.get("action_followups"):
         headers = [
             words[k] for k in ("recommendation", "verification", "baseline", "current", "result")

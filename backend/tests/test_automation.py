@@ -79,7 +79,7 @@ def test_merchant_notes_crud_and_report_context(api_client, isolated_storage):
     notes = report["content"]["merchant_notes"]
     assert [n["id"] for n in notes] == [note["id"]] and notes[0]["kind"] == "promotion"
     tools = [e["tool"] for e in report["content"]["evidence_index"]]
-    assert "get_merchant_notes" in tools and len(tools) == 8
+    assert "get_merchant_notes" in tools and "get_history" in tools and len(tools) == 9
     updated = api_client.put(
         f"/api/v1/notes/{note['id']}",
         json={**{k: note[k] for k in ("start_date", "end_exclusive", "kind")}, "text": "已更新"},

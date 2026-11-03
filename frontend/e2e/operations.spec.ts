@@ -1,14 +1,23 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import { seed } from './fixtures';
+import { expectAccessible } from './axe';
 
-test('offline exports, keyboard evidence, configuration revision and reviewed deletion', async ({ page }) => {
+test('offline exports, keyboard evidence, configuration revision and reviewed deletion', async ({
+  page,
+}) => {
   test.setTimeout(180000);
   await page.goto('/');
   await expect(page.getByRole('heading', { name: '工作台' })).toBeVisible();
   const dataset = await seed(page, 'orders.csv', 'orders', await seed(page, 'costs.csv', 'costs'));
   const headers = { Origin: new URL(page.url()).origin, 'Idempotency-Key': crypto.randomUUID() };
-  const created = await page.request.post('/api/v1/reports', { headers, data: { title: '导出与删除测试', query: { dataset_id: dataset, start: '2026-09-28', end_exclusive: '2026-10-05' } } });
+  const created = await page.request.post('/api/v1/reports', {
+    headers,
+    data: {
+      title: '导出与删除测试',
+      query: { dataset_id: dataset, start: '2026-09-28', end_exclusive: '2026-10-05' },
+    },
+  });
   expect(created.status()).toBe(202);
   const report = (await created.json()).data;
   await page.goto(`/reports/${report.id}`);
@@ -35,6 +44,7 @@ test('offline exports, keyboard evidence, configuration revision and reviewed de
   }
   await page.goto('/operations');
   await expect(page.getByRole('heading', { name: '运行管理' })).toBeVisible();
+  await expectAccessible(page);
   const original = (await (await page.request.get('/api/v1/operations/settings')).json()).data;
   await page.getByLabel('店铺名称', { exact: true }).fill(original.name);
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
@@ -47,6 +57,7 @@ test('offline exports, keyboard evidence, configuration revision and reviewed de
   await page.getByLabel('对象 ID').fill(report.id);
   await page.getByRole('button', { name: '预览删除影响' }).click();
   await expect(page.locator('.deletion-preview')).toContainText('报告及证据/追问：1');
+  await expectAccessible(page);
   await page.getByLabel('输入“确认删除”以执行').fill('确认删除');
   await page.getByRole('button', { name: '执行已预览操作' }).click();
   await expect(page.getByRole('status')).toContainText('操作已完成');

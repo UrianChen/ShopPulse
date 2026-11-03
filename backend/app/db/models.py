@@ -223,7 +223,9 @@ class ModelConfig(Base):
     protocol: Mapped[str] = mapped_column(
         String(30), default="openai_chat", server_default="openai_chat"
     )
-    timeout_seconds: Mapped[int] = mapped_column(Integer, default=45)
+    # Optional cheaper model on the same service that reviews validated reports.
+    review_model_name: Mapped[str | None] = mapped_column(String(200))
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=120)
     token_limit_parameter: Mapped[str] = mapped_column(String(30), default="none")
     revision: Mapped[int] = mapped_column(Integer, default=1)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)

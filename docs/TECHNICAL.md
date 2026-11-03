@@ -6,7 +6,7 @@
 
 当前交付为桌面 Web、单店铺默认工作空间，窗口宽度至少 1024px。没有内建账号体系，没有 Windows 一键安装包；数据库必须是 PostgreSQL，不能替换为 SQLite。
 
-实现基准：数据库迁移 `0002_agent_v2`、指标引擎 `2.0.0`、指标定义 `1.0`、异常规则 `1.0`、提示词 `2.0`、证据语法 `2.0`、授权范围 `2.0`。依赖版本以 `backend/uv.lock` 和 `frontend/package-lock.json` 为准。
+实现基准：数据库迁移 `0003_agent_v3`、指标引擎 `2.1.0`、指标定义 `1.0`、异常规则 `1.0`、提示词 `3.0`、证据语法 `3.0`、工具 `3.0`、授权范围 `2.0`。依赖版本以 `backend/uv.lock` 和 `frontend/package-lock.json` 为准。
 
 ## 技术栈
 
@@ -28,7 +28,8 @@
 | 导出 | fontTools 4.66（字体子集化）、Playwright 1.63 + Chromium（PDF 打印） | 离线 HTML、Markdown ZIP、A4 PDF |
 | 可观测性 | OpenTelemetry SDK 1.45、OTLP/HTTP exporter | 可选链路追踪；本地运行记录与 trace ID 始终保留 |
 | 前端 | React 19.3、TypeScript 5.9、Vite 7.3、react-router-dom 7.18、TanStack Query 5.104、lucide-react、原生 `EventSource` | 单页应用、轮询与 SSE、自绘 SVG 图表 |
-| 前端测试 | Vitest 5、Playwright Test 1.63 | 单元测试与 Compose 端到端测试 |
+| 前端测试 | Vitest 5、Testing Library、jsdom、axe-core、Playwright Test 1.63 | 单元与组件测试（含无障碍扫描）、Compose 端到端测试 |
+| 前端工程 | Prettier 3、ESLint 9（typescript-eslint、react-hooks、jsx-a11y）、openapi-typescript 7 | 格式化、静态检查、由 OpenAPI 生成请求类型 |
 | 后端测试 | pytest 9、pytest-cov、httpx、pypdf、ruff 0.16 | 真实 PostgreSQL schema 上的回归测试、覆盖率门槛、静态检查 |
 | 部署 | Docker Compose v2、`nginxinc/nginx-unprivileged:1.28-alpine`、`node:24.14.0-alpine`（构建） | 五个服务：db、migrate、api、worker、web |
 | CI | GitHub Actions、pip-audit、npm audit | 后端、前端、Compose 浏览器测试、离线 Agent 评测门禁 |
@@ -65,7 +66,8 @@ flowchart LR
 | `backend/app/observability` | OpenTelemetry 初始化、调试留存清理 |
 | `backend/app/evals`、`backend/evals` | 离线/在线评测流水线、合成用例与基线 |
 | `backend/migrations`、`tests` | Alembic 迁移、回归测试 |
-| `frontend/src/features`、`lib` | 功能页面、API 封装、中英文消息 |
+| `frontend/src/features`、`components`、`lib`、`test` | 功能页面（每个页面一个目录）、公共组件、API 封装与类型、查询键、中英文消息、测试工具与样例 |
+| `frontend/scripts`、`openapi.json` | 翻译完整性与包体积检查、API 文档快照（生成请求类型的来源） |
 | `samples`、`scripts`、`docs` | 示例数据、维护脚本、文档与截图 |
 | `licenses`、`deploy`、`compose*.yaml` | 第三方许可、Nginx 配置、部署定义 |
 
@@ -83,7 +85,7 @@ flowchart LR
 | `cost_versions` / `cost_rows` | 成本版本与 SKU 有效区间；工作空间内 fingerprint 唯一 |
 | `dataset_versions` / `order_lines` | 订单版本与标准明细；版本内 line_id 唯一，按版本/时间、版本/SKU 建索引 |
 | `metric_snapshots` / `metric_products` | 指标查询缓存与商品分页；工作空间内 cache_key 唯一，快照内 group_key 唯一 |
-| `model_configs` | 协议、加密凭证、授权范围、能力测试结果；每个工作空间最多一个默认配置 |
+| `model_configs` | 协议、可选审稿模型、加密凭证、授权范围、能力测试结果；每个工作空间最多一个默认配置 |
 | `reports` | 报告修订：查询、规则、输出语言、来源定时任务、冻结的模型快照与内容；series_id/revision 唯一 |
 | `agent_runs` | 每次执行的预算、步骤、用量、trace ID、可选调试留存；job_id/attempt 唯一 |
 | `tool_results` | 冻结的工具证据；按 report_id/tool/args_hash 建索引供复用 |
@@ -94,7 +96,7 @@ flowchart LR
 | `jobs` / `worker_pulses` | 队列、幂等键、租约、心跳；按 status/available_at 索引领取 |
 | `exports` / `audit_events` | 导出文件状态与有效期、操作审计摘要 |
 
-发布冻结字段映射、口径和成本；报告冻结查询、规则、证据、模型配置与授权范围。新文件不会改写旧报告，新修订保留系列 ID 并递增 revision。导入草稿、模型配置、店铺设置、行动项和定时任务都用 `expected_revision`/`revision` 防覆盖；相同输入指纹复用数据版本。迁移 `0001_initial` 创建最初 19 张表，`0002_agent_v2` 增加行动项、备注、定时任务三张表以及协议、语言、trace 等列；后续结构变更追加新迁移。
+发布冻结字段映射、口径和成本；报告冻结查询、规则、证据、模型配置与授权范围。新文件不会改写旧报告，新修订保留系列 ID 并递增 revision。导入草稿、模型配置、店铺设置、行动项和定时任务都用 `expected_revision`/`revision` 防覆盖；相同输入指纹复用数据版本。迁移 `0001_initial` 创建最初 19 张表，`0002_agent_v2` 增加行动项、备注、定时任务三张表以及协议、语言、trace 等列，`0003_agent_v3` 为模型配置增加审稿模型列；后续结构变更追加新迁移。
 
 ```text
 导入：mapping_required → validating → review_required / ready → publishing → published
@@ -162,15 +164,17 @@ API 数值用十进制字符串传输，例如 `{"value":"55000","unit":"minor_c
 
 查询采用 `[start, end_exclusive)`，页面结束日包含当天；按数据版本时区划分自然日和周一，范围 1–366 天、最多 100 个 SKU。指标缓存键包含数据/成本版本、口径、查询和引擎版本；计算预算 120 秒 / 1536 MiB。算法或口径变化须更新对应版本，商品分页不改变总体指标。
 
+指标结果另含 `decompositions`：毛利率与退款占比按“商品结构效应 + 单品费率效应 + 其他”分解（百分点，三者之和严格等于总变化；只在一期出现的商品以另一期费率作参照，分母为零而分子不为零的商品计入其他），客单价分解为“件单价效应 + 每单件数效应”；覆盖不完整、比较期缺失或数值不可用时给出原因而不计算。销售贡献项与分解项附带两期支付订单数，供报告层标注小样本。
+
 比较方式为 `previous`、`custom`、`none`：previous 自动计算上一等长周期，custom 必须同时指定比较起止日期。SKU 排序去重后参与缓存键。完整覆盖且没有交易时金额和订单为零；没有记录且覆盖未知时不能解释为零销售。比率采用 Decimal，比较先计算后格式化；上期为零或负基期时提供差额和不可计算增长率的原因。销售贡献是描述性分解，不构成广告或促销效果的因果结论。
 
 ## Agent 与模型边界
 
-核心原则：**数字由代码计算，模型负责解释**。所有数值、商品、日期、规则名只能通过“证据绑定”进入正文，由服务端取值渲染；每次工具调用都留下带哈希的证据；请求、工具、轮次、字节、token 和时间都有预算。
+核心原则：**数字由代码计算，模型负责解释**。所有数值、商品、日期、规则名只能通过“证据绑定”进入正文，由服务端取值渲染；每次工具调用都留下带哈希的证据；请求、工具、轮次、字节、token 和时间都有预算。3.0 起模型提出的原因也由代码裁决：假设附带可机器判定的预期，服务端运行检验后判定成立、被否定或无法判断。
 
 ### 工具
 
-服务端先运行七个核心工具并保存证据（不计入模型的工具预算），随后模型在受限循环中按需调用：
+服务端先运行七个核心工具并保存证据（不计入模型的工具预算），随后模型通过假设检验或受限循环按需调用：
 
 | 工具 | 参数 | 输出 |
 | --- | --- | --- |
@@ -187,8 +191,15 @@ API 数值用十进制字符串传输，例如 `{"value":"55000","unit":"minor_c
 | `explain_metric` | 指标名 | 服务端维护的指标口径说明，不含数值 |
 | `check_recommendation` | 无 | 到期复查的历史建议及其验证指标在提出时与本期的数值 |
 | `get_merchant_notes` | 无 | 与本期或比较期重叠的商家备注 |
+| `decompose_metric_change` | 指标（毛利率、退款占比、客单价） | 结构效应与费率效应（按 SKU），或件单价与每单件数效应 |
+| `get_history` | 无 | 本期之前至多 8 个等长窗口的店铺级指标（最近在前）与各指标连续同向变化的期数 |
+| `derive` | 运算与两个证据路径 | 两个已有数值的差、比、倍数或份额（通常直接用计算型绑定） |
 
-存在到期的历史建议或重叠的商家备注时，`check_recommendation` 与 `get_merchant_notes` 也由服务端预先运行。`inspect_sku` 由 Worker 进程用指标引擎对冻结数据版本中该 SKU 的订单明细重算，单次最多读取 `DRILL_ROW_LIMIT` 行，超出返回 `ROWS_LIMIT`；SKU 必须在报告范围内。其余工具只读报告上下文。同一报告内相同工具与相同参数（按参数哈希）复用已有证据，不重算也不重复记录；追问复用报告运行时产生的证据。工具没有任意代码、SQL、文件或网络执行权限。
+`refund_breakdown` 按 SKU 时附带比较期数值和退款占比变化。按 SKU 输出的排行、贡献、分解、下钻结果带 `sample` 标记：两期中较大一期的支付订单少于 10 单记为 `low`。
+
+**历史窗口**在首次生成报告时、进入报告事务之前计算：以本期长度为窗口，向前取至多 8 个窗口（总跨度不超过 366 天），在隔离的指标子进程中按冻结数据版本聚合，结果随 `get_history` 证据冻结；覆盖不完整的窗口所有指标标为不可用。存在历史时 `get_history` 作为核心证据预先运行。
+
+存在到期的历史建议或重叠的商家备注时，`check_recommendation` 与 `get_merchant_notes` 也由服务端预先运行。服务端内部另有 `test_hypothesis` 与 `recheck_hypotheses` 两个工具（不提供给模型），见下文假设检验。`inspect_sku` 由 Worker 进程用指标引擎对冻结数据版本中该 SKU 的订单明细重算，单次最多读取 `DRILL_ROW_LIMIT` 行，超出返回 `ROWS_LIMIT`；SKU 必须在报告范围内。其余工具只读报告上下文。同一报告内相同工具与相同参数（按参数哈希）复用已有证据，不重算也不重复记录；追问复用报告运行时产生的证据。工具没有任意代码、SQL、文件或网络执行权限。
 
 证据记录 ID、报告、数据版本、查询范围、工具版本、参数及其哈希、结果及其哈希。哈希用于一致性检查，不是数字签名。
 
@@ -198,21 +209,22 @@ API 数值用十进制字符串传输，例如 `{"value":"55000","unit":"minor_c
 
 ### 预算
 
-每次报告或追问的模型阶段最多 **8 次工具、5 轮工具、每轮 3 个并行调用、8 次模型请求、2 次修复**；累计输入/输出 **480000/64000 UTF-8 字节**（每轮请求都重发整段对话，输入字节按累计计算），供应商返回 usage 时另限输入/输出 **120000/80000 token**；单次请求的输出上限参数为 4000（Anthropic 未配置长度参数时为 8000）。输出字节只统计回复正文和工具调用，不含 `reasoning_content` 等提供方附加字段；token 用量按提供方返回值统计，推理模型的推理 token 通常包含在内。模型子进程内部截止约 585 秒，父进程约 595 秒；600 秒预算不含排队和独立指标计算。连接测试最多 8 次合成请求、约 100 秒预算、110 秒子进程截止。
+每次报告的模型阶段最多 **8 次工具、5 轮工具、每轮 3 个并行调用、8 次模型请求、2 次修复、10 次假设检验（每轮至多 5 条、共 2 轮）**；追问最多 **4 次工具、2 轮、5 次请求、1 次修复**，不做新的假设检验。累计输入/输出 **480000/64000 UTF-8 字节**（每轮请求都重发整段对话，输入字节按累计计算），供应商返回 usage 时另限输入/输出 **120000/80000 token**；单次请求的输出上限参数为 4000（Anthropic 未配置长度参数时为 16000：自适应思考计入同一上限，8000 时 Haiku 的思考会把 JSON 截断）；回复因达到上限而截断时记 `OUTPUT_TRUNCATED`（Anthropic `stop_reason: max_tokens`、OpenAI `finish_reason: length`），不再误报为格式错误。输出字节只统计回复正文和工具调用，不含 `reasoning_content` 等提供方附加字段；token 用量按提供方返回值统计，推理模型的推理 token 通常包含在内。模型子进程内部截止约 585 秒，父进程约 595 秒；600 秒预算不含排队和独立指标计算。连接测试最多 8 次合成请求、约 100 秒预算、110 秒子进程截止。
 
 ### 提示词与能力策略
 
-提示词按版本存放在 [app/reports/prompts](../backend/app/reports/prompts)（公共规则、报告、追问三个文件）。修改提示词需新建版本目录并提升 `PROMPT_VERSION`，报告快照记录所用版本。
+提示词按版本存放在 [app/reports/prompts](../backend/app/reports/prompts)（公共规则、报告、追问、审稿四个文件）。修改提示词需新建版本目录并提升 `PROMPT_VERSION`，报告快照记录所用版本。
 
-连接测试依次探测基础响应、工具调用及回传、JSON 模式（Anthropic 跳过）、JSON Schema 结构化输出，以及文本 JSON 兜底；能力策略依次为 `native_tools`（原生工具调用）、`restricted_json`（模型用 `{"tools":[...]}` JSON 信封请求工具）、`narrative`（不开放工具）。最终输出优先使用 JSON Schema 严格模式，其次 JSON 模式；工具与输出约束组合被拒绝（`UNSUPPORTED_REQUEST`）时去掉输出约束重试一次。单次 socket 超时 5–300 秒，默认 45 秒；服务是非流式的，带推理（thinking）的模型生成最终 JSON 常需两三分钟，须把超时调到足够大；响应上限 1 MiB；仅限流和服务异常允许一次短暂重试。探测通过不代表实际报告一定通过。
+连接测试依次探测基础响应、工具调用及回传、JSON 模式（Anthropic 跳过）、JSON Schema 结构化输出，以及文本 JSON 兜底；能力策略依次为 `native_tools`（原生工具调用）、`restricted_json`（模型用 `{"tools":[...]}` JSON 信封请求工具）、`narrative`（不开放工具）。最终输出优先使用 JSON Schema 严格模式，其次 JSON 模式；请求的输出约束被拒绝（`UNSUPPORTED_REQUEST`，如工具与输出约束不能组合，或服务认为结构过大）时去掉输出约束重试一次，回复仍由服务端完整校验。报告和追问的结构把重复出现的句子和绑定提取为共享的 `$defs`（约 2.7 KB，内联时约 7 KB）：Anthropic 会把严格结构编译成语法，内联版本被拒绝为“语法过大”。单次 socket 超时 5–300 秒，默认 120 秒（3.0.0 之前为 45 秒，已有配置保留原值）；服务是非流式的，带推理（thinking）的模型写一份报告常需一分钟以上，45 秒会让长的写作调用超时；响应上限 1 MiB；仅限流和服务异常允许一次短暂重试。探测通过不代表实际报告一定通过。
 
 模型输出结构见 [reports/schema.py](../backend/app/reports/schema.py)：
 
 | 输出 | 必要内容 |
 | --- | --- |
 | `summary[]` | 一到四个带绑定的句子 |
-| `findings[]` | ID、topic（sales/refund/cost/product/period/quality/followup）、标题、observation、最多三条 supporting、最多三条 hypotheses；一到五条 |
+| `findings[]` | ID、topic（sales/refund/cost/product/period/quality/followup）、标题、observation、最多三条 supporting、最多三条待验证 hypotheses、最多三个已支持的 `hypothesis_ids`；一到五条 |
 | `recommendations[]` | action 句子、关联观察 ID、priority、effort、验证指标、复查周期；一到四条 |
+| `ruled_out[]` | 被否定的假设 ID 与一句说明；至多四条 |
 
 ### 证据语法
 
@@ -232,29 +244,59 @@ API 数值用十进制字符串传输，例如 `{"value":"55000","unit":"minor_c
 | `entity` | SKU；授权包含商品名时也可绑定商品名 | `A` |
 | `date` | 趋势点与离群日期 | `2026-10-01` |
 | `label` | 规则代码、规则状态、质量警告、指标名、复查结论、备注类型 | `负毛利商品`、`已触发`、`已改善` |
-| `note` | 商家备注原文、历史建议原文（截断到 120 字并加引号） | `“国庆满减活动”` |
+| `multiple` | 计算型绑定或派生证据的倍数 | `2.35 倍`、`2.35×` |
+| `note` | 商家备注原文、历史建议原文、上期假设原文（截断到 120 字并加引号） | `“国庆满减活动”` |
+
+`label` 另覆盖假设状态（数据支持、已排除、无法判断）与趋势方向（上升、下降、持平）。
+
+**计算型绑定**：绑定可带 `derive: {"op": "diff" | "ratio" | "multiple" | "share", "b": {"evidence_id", "path"}}`，以绑定自身的值为 a、`b` 为另一个值，服务端计算后渲染。两个操作数都必须是白名单中的数值路径且单位相同；`diff` 要求同一指标（两个比率之差输出百分点），`share` 要求同一指标、同一周期，分母是店铺总量路径或同一证据中的总量，部分不得超过总量；分母为零或为负、取值不可用都拒绝。结果作为 `derive` 证据记录（ID 由运算与来源哈希确定，重复计算得到同一记录），证据抽屉可查看来源。“翻倍、一半”等词仍在禁词表中，只能通过绑定渲染出 `倍` 或百分比。
+
+**小样本**：句子中某个变化值来自 `sample: low` 的商品，且句子所有绑定都来自小样本商品时，摘要、观察和 supporting 判为 `LOW_SAMPLE_ONLY`；需加一个店铺级绑定，或改写为待验证假设。
 
 校验依次检查：占位符与绑定一一对应（每句最多四个绑定）；`evidence_id` 属于本报告且证据的报告、数据版本、查询范围、结果哈希一致；`path` 命中该工具的可绑定路径白名单（阈值、参数、哈希等无法进入正文）；路径能解析且值类型与 `format` 一致，不可用的指标不能绑定；去掉占位符后的模板、标题和其余自由文本不得出现数字（含中文和全角数字）、英文数字词、百分号、URL、`SKU` 字样或“保证、必然”等确定性断言，也不得直接写出证据里出现过的 SKU 或商品名；摘要、观察和 supporting 至少一个绑定，假设和建议可以不带绑定。
 
-校验一次收集全部问题及其位置（如 `findings[0].supporting[1].bindings[0]: WRONG_FORMAT`），便于定向修复。模型看到的是核心证据的投影：保留证据 ID 和原始路径结构，去掉订单 ID、源行号和未授权的商品名；列表只截尾，所以截断后剩余路径仍然有效；规则检查与警告列表永不截断。模型完整回复和内部推理不会作为报告内容保存。
+校验一次收集全部问题及其位置（如 `findings[0].supporting[1].bindings[0]: WRONG_FORMAT`），便于定向修复；`PATH_NOT_ALLOWED` 与 `PATH_NOT_FOUND` 附带该证据中最接近的可绑定路径。模型看到的是核心证据的投影：保留证据 ID 和原始路径结构，去掉订单 ID、源行号和未授权的商品名；列表只截尾，所以截断后剩余路径仍然有效；规则检查与警告列表永不截断。模型完整回复和内部推理不会作为报告内容保存。
+
+### 假设检验
+
+实现见 [hypothesis.py](../backend/app/reports/hypothesis.py)。一条假设包含：陈述句（证据语法，绑定可选）、一个检验（一次只读工具调用）和一个预期：
+
+| 预期 | 含义 |
+| --- | --- |
+| `gt` / `lt` | a 大于 / 小于 b 或阈值（默认 0；水平值“大于 0”视为平凡并拒绝，“毛利小于 0”这类可证伪的预期允许） |
+| `abs_ge` / `abs_gt` | \|a\| ≥ 阈值 / \|a\| > \|b\|（如结构效应大于费率效应） |
+| `share_ge` | a ÷ b ≥ 阈值（0–1），按 `share` 规则计算 |
+| `rank_le` | 按键选中的元素位于列表前 k 位 |
+| `same_sign` | a 与 b 同向变化 |
+
+操作数为 `{source, path, select}`：`source` 为 `test`（本假设的检验结果）或已有证据 ID，至少一个操作数来自 `test`；`select` 按 `sku`、`start`、`code` 或 `date` 选择列表元素，避免位置随数据变化。路径必须在证据语法白名单内。服务端执行检验并判定：取值不可用、按键找不到或变化值来自小样本商品时为“无法判断”；退款拆解、成本覆盖这类只列出非零项且未被 `top_k` 截断的列表中找不到所选商品时，“大于、份额不低于”一类预期判为被否定（`NOT_PRESENT`）；份额预期中部分超过总量（其他商品反向变化）时视为份额超过阈值；估算值照常判定并标注估算。判定结果作为 `test_hypothesis` 证据保存（含渲染后的陈述、操作数取值、份额等派生值，以及把位置引用锚定为按键选择后的检验规格），可绑定 `state`、`derived`、`operands.N.value`。“数据支持”只表示数据与陈述一致，不证明因果。
+
+**服务端候选**：确定性阶段按触发的规则先提出并检验至多 5 条候选假设（销售变化：订单量与客单价孰主导、是否集中在单个商品、件单价与每单件数孰主导；退款偏高：是否集中在单个商品、单品退款率与结构孰主导；毛利率明显变化：结构与费率孰主导），没有模型的报告也展示这些判定。
+
+**上期复核**：同一系列的新修订（含定时周报）取上一份完成修订中成立或被否定的假设（至多 5 条，模型提出的优先），用锚定后的规格在本期数据上重新判定，写入 `recheck_hypotheses` 证据和报告的“上期结论复核”。
 
 ### 多步循环
 
-实现见 [workflow.py](../backend/app/reports/workflow.py)。每一步都写入运行记录（`agent_runs.steps`），Worker 运行期间实时追加，报告页按步骤显示：
+实现见 [workflow.py](../backend/app/reports/workflow.py)。每一步都写入运行记录（`agent_runs.steps`），Worker 运行期间实时追加，报告页按步骤显示。能力策略为 `native_tools` 或 `restricted_json` 的报告走假设循环：
 
-1. **规划**：服务端按意图给出 `analysis_goals`（销售变化、退款、毛利与成本、商品驱动等），附核心证据投影和可直接使用的事实句。
-2. **调用工具**：模型一轮最多请求 3 个工具，超出的返回 `TOO_MANY_PARALLEL_CALLS`。未知工具、非法参数、超出预算都以错误结果回给模型。
-3. **观察**：工具结果带证据 ID 返回；相同参数的重复调用返回 `DUPLICATE_CALL`，不产生新证据。
-4. **收尾**：一轮没有新证据、达到 5 轮、请求或输入预算接近上限、剩余时间不足，任一情况即关闭工具（`tool_choice=none`）并要求最终 JSON。
-5. **校验与修复**：最终输出未通过校验时，把问题位置和错误码发回模型，最多修复 2 次；服务端消息不回显模型原文。修复仍失败记 `EVIDENCE_VALIDATION_FAILED`，报告保留确定性结果。
+1. **规划**（`phase: plan`）：模型看到核心证据投影、事实句、服务端候选的判定和工具目录，回复 `{"hypotheses": [...]}`，至多 5 条；格式错误时提示一次，仍失败则回退到下文的工具循环。
+2. **检验**：服务端逐条运行检验并判定，结果（判定摘要和检验证据投影）在一条消息中返回模型；检验在父进程执行，不消耗模型的工具预算，模型的单次请求不再对应单次工具调用。
+3. **深化**（`phase: refine`，可选）：存在已支持的假设且预算充足时，模型可在其基础上再提至多 3 条（从店铺级驱动到具体 SKU 或日期），回复空列表则直接成稿。
+4. **成稿**（`phase: write`）：模型写最终报告，发现只能引用已支持的假设，`ruled_out` 只能引用被否定的假设。
+5. **校验与修复**：最终输出未通过校验时，若所有问题都落在具体句子或字段上，只要求模型回传这些位置的补丁（`{"patches": [...]}`），服务端合并后整体重新校验；否则要求重写整段 JSON。最多修复 2 次，服务端消息不回显模型原文。修复仍失败记 `EVIDENCE_VALIDATION_FAILED`，报告保留确定性结果。
+6. **审稿**：校验通过后做确定性检查——正文措辞与绑定变化值方向相反（`DIRECTION_MISMATCH`）、建议的验证指标不衡量所关联发现的主题（`NO_VERIFICATION`）、引用的商家备注提到的是其他商品（`WEAK_NOTE_LINK`）；模型配置填写了审稿模型且连接测试确认可用（`review_usable`）时，再用它独立审读渲染后的正文。确定性问题或审稿模型的重要问题触发一次补丁修复，修复后必须重新通过校验且确定性问题不增加，否则保留原稿。
+
+典型的假设循环为规划、深化、成稿三次请求。`narrative` 策略与追问走工具循环：模型一轮最多请求 3 个工具（超出返回 `TOO_MANY_PARALLEL_CALLS`），重复调用返回 `DUPLICATE_CALL`；一轮没有新证据、达到轮次上限、预算接近上限或剩余时间不足即关闭工具（`tool_choice=none`）并要求最终 JSON，校验与修复同上。
 
 对话超过 64 KB 时，早于当前轮的工具结果替换为“证据 ID 加前几项摘要”，完整结果仍在证据中。Anthropic Messages 例外：历史只追加、助手回合原样回放（含思考块），因为改写历史会使思考块失效，此时靠收尾条件控制长度。
+
+**提示缓存**：系统提示和初始证据固定是每次请求的前两条消息。Anthropic Messages 请求在工具与系统提示之后、首条数据消息之后各加一个 `cache_control: ephemeral` 断点；OpenAI 服务自动缓存稳定前缀。运行记录的每次模型请求记录 `cached_tokens`（供应商返回时）。
 
 模型循环运行在独立子进程中：子进程只持有 Key 并访问网络；所有工具通过匿名管道上的逐行 JSON 协议请求父进程（Worker）执行，因此下钻工具能读数据库而模型进程不能。子进程只回传原始输出，父进程用自己持有的证据重新校验，校验不通过记 `PARENT_VALIDATION_FAILED`。
 
 ### 追问
 
-追问最长 2000 字符，每份报告同时一条。服务端先用规则拦截两类问题：需要广告、流量、库存数据的问题直接给出缺数据说明；明确涉及其他日期范围的问题，在未授权发送原问题时给出新建分析提示。其余问题交给模型，回答使用与报告相同的证据语法，可继续调用工具下钻。三种结果：
+追问最长 2000 字符，每份报告同时一条，使用追问预算；报告阶段已判定的假设随初始证据提供，回答可在发现中引用已支持的假设。服务端先用规则拦截两类问题：需要广告、流量、库存数据的问题直接给出缺数据说明；明确涉及其他日期范围的问题，在未授权发送原问题时给出新建分析提示。其余问题交给模型，回答使用与报告相同的证据语法，可继续调用工具下钻。三种结果：
 
 - `answer`：一到四句带绑定的回答，可附观察与建议。
 - `clarify`：反问并给出最多三个选项，前端点选即填入问题框。
@@ -274,7 +316,7 @@ API 数值用十进制字符串传输，例如 `{"value":"55000","unit":"minor_c
 | `openai_responses` | `{根地址}/responses`，`store: false` | `Authorization: Bearer` | `text.format` 的 `json_schema`（strict）或 `json_object` |
 | `anthropic_messages` | `{根地址}/messages` | `x-api-key`，`anthropic-version: 2026-10-21` | `output_config.format` 的 `json_schema` |
 
-实现见 [protocols.py](../backend/app/providers/protocols.py)。循环内部使用统一的消息格式，按协议转换请求与解析响应；拒答记为 `MODEL_REFUSED`。三种协议都经同一个加固出站层直接发 HTTP 请求，没有引入厂商 SDK。Anthropic 当前模型不接受强制指定工具，连接测试改为提示调用；收尾时用 `tool_choice: none` 关闭工具；输入 token 统计包含缓存读写。不设置温度等采样参数。
+实现见 [protocols.py](../backend/app/providers/protocols.py)。循环内部使用统一的消息格式，按协议转换请求与解析响应；拒答记为 `MODEL_REFUSED`。三种协议都经同一个加固出站层直接发 HTTP 请求，没有引入厂商 SDK。Anthropic 当前模型不接受强制指定工具，连接测试改为提示调用；收尾时用 `tool_choice: none` 关闭工具；输入 token 统计包含缓存读写。不设置温度等采样参数。模型配置可在“高级设置”中填写**审稿模型**（同一服务上更便宜的模型 ID），与主模型共用地址、密钥和授权范围，只接收渲染后的报告正文与假设判定；留空不调用。连接测试最后一步用审稿调用相同的请求形状探测它（显示为“审稿模型”阶段），结果记为能力 `review_usable`；探测失败只停用审稿，不影响主模型可用。旧版本测试过、没有该标记的配置视为不可用，重新测试即可启用。
 
 ### 输出语言
 
@@ -298,7 +340,7 @@ API Key 使用 AES-256-GCM、HKDF-SHA256 和 secret 主密钥保护，关联数�
 
 ## 导出
 
-导出共用冻结报告，不重新调用模型，在受监控的子进程中渲染。HTML 为单文件离线页面：服务端模板、转义数据、按正文子集化的 Noto Sans SC 字体和 SVG 图表以 data URI 内嵌，带禁止脚本与网络的 CSP。Markdown ZIP 包含 `report.md`、`evidence.json` 和两张 SVG。PDF 由 Playwright Chromium 以 A4 离线打印并阻断网络请求。章节包括经营概览、指标表、趋势与销售贡献、商品表现、异常与限制、经营观察与行动建议（含支撑事实与待验证假设）、上期建议跟进、商家备注、证据附录。默认保留 30 天，过期下载返回 410。
+导出共用冻结报告，不重新调用模型，在受监控的子进程中渲染。HTML 为单文件离线页面：服务端模板、转义数据、按正文子集化的 Noto Sans SC 字体和 SVG 图表以 data URI 内嵌，带禁止脚本与网络的 CSP。Markdown ZIP 包含 `report.md`、`evidence.json` 和两张 SVG。PDF 由 Playwright Chromium 以 A4 离线打印并阻断网络请求。章节包括经营概览、指标表、趋势与销售贡献、商品表现、异常与限制、经营观察与行动建议（含支撑事实、数据支持的假设与待验证假设）、假设检验与已排除的原因、上期结论复核、历史窗口、上期建议跟进、商家备注、证据附录。默认保留 30 天，过期下载返回 410。
 
 ## API 与前端
 
@@ -349,7 +391,9 @@ API Key 使用 AES-256-GCM、HKDF-SHA256 和 secret 主密钥保护，关联数�
 
 追问请求为 `{"question":"这期退款需要关注什么？"}`，导出请求为 `{"format":"html"}`（也可 markdown/pdf）。SSE 流每秒检查一次步骤，发送 `event: step`，运行结束发送 `event: done`，每 10 秒发送注释心跳，600 秒后发送 `event: timeout`。清理或关联删除需先 GET 预览，再 POST `{"token":"预览返回值","confirmation":"确认删除"}`；关联或配置变化会使旧 token 失效。HTTP 202 只表示任务已提交，不能当作业务成功；最终以资源状态和错误码为准。
 
-前端页面：工作台、数据中心、经营看板、智能周报、自动化、模型设置、运行管理。`lib/api.ts` 统一请求，URL 保留看板筛选；`lib/i18n.ts` 与消息字典管理中英文，localStorage 只保存 `shoppulse.language`，切换语言不重挂载页面、不丢表单、不翻译用户数据和历史报告。页面通过 TanStack Query 轮询，报告运行轨迹另用 `EventSource` 订阅 SSE，浏览器不支持或连接失败时退回轮询。React 负责格式化和绘图，不重新计算权威金额。新增状态或错误提示需同步中英文消息，避免在模块初始化时冻结翻译。
+前端页面：工作台、数据中心、经营看板、智能周报、自动化、模型设置、运行管理，按路由懒加载，每个页面一个目录，单个源文件不超过 300 行（ESLint `max-lines`），图表组件只接收数据不发请求。`lib/api.ts` 统一请求；请求体和响应类型都由 `npm run api:types` 从 `frontend/openapi.json` 生成到 `lib/schema.ts`（`scripts/export_openapi.py` 从后端导出该文件，CI 检查两者都未过期）。响应结构在 [api/responses.py](../backend/app/api/responses.py) 用 Pydantic 声明，只描述接口已有的输出、不改变它：[response_guard.py](../backend/tests/response_guard.py) 在每个测试请求中逐字节比对声明前后的序列化结果。报告内容、证据、快照等自由结构在生成类型中是 `{ [key: string]: unknown }`，`lib/types.ts` 用 `Refine` 补上页面读取的字段；查询键与轮询规则集中在 `lib/queries.ts`（详情键挂在列表键之下，一次失效同时刷新；只在已有数据显示任务进行中时轮询，加载失败不会无限重试）；日期、错误提示和加载状态使用 `lib/dates.ts` 与 `components/`。URL 保留看板筛选；`lib/i18n.ts` 与消息字典管理中英文，localStorage 只保存 `shoppulse.language`，切换语言不重挂载页面、不丢表单、不翻译用户数据和历史报告。页面通过 TanStack Query 轮询，报告运行轨迹另用 `EventSource` 订阅 SSE，浏览器不支持或连接失败时退回轮询。React 负责格式化和绘图，不重新计算权威金额。新增状态或错误提示需同步中英文消息，避免在模块初始化时冻结翻译；`npm run check:i18n` 找出没有英文翻译的中文字符串（含之后再交给 `t()` 的标签表），`--strict` 同时拒绝不再使用的翻译。同一中文在不同语境含义不同时，用不同的中文键区分。报告证据抽屉对派生计算、假设检验、历史窗口和上期复核证据显示可读摘要，并保留原始数据。
+
+样式使用 CSS Modules（每个页面或组件一个 `*.module.css`）加三份全局样式：[tokens.css](../frontend/src/styles/tokens.css) 是全部颜色、圆角、阴影和间距的设计令牌（颜色按色相和 CIE L* 亮度命名，色差 ΔE2000 小于 2 的合并为一个令牌），`global.css` 与 `tables.css` 放元素级基础样式。组件测试（Vitest + Testing Library）用 MSW 回放 [src/test/api.json](../frontend/src/test/api.json)；该文件由后端测试 `test_visual_fixtures.py` 调用真实 API 录制，接口变化后重新录制即可，没有被应答的请求会让测试失败。视觉回归（`npm run test:visual`）用同一份录制数据在构建产物上截取中英文各 12 个页面的整页截图，并对每页运行 axe 检查（严重和关键问题失败）。字体渲染因系统而异，基线按平台保存，Linux 基线在 CI 使用的 Playwright 容器中生成（`npm run test:visual:linux -- --update-snapshots=all`）。
 
 ## 本地开发
 
@@ -432,41 +476,82 @@ uv run python ../scripts/check_coverage.py coverage.json
 uv run python -m app.evals run --gate
 
 # frontend 目录
+npm run format:check   # 或 npm run format 自动格式化
+npm run lint
+npm run check:i18n -- --strict
 npm test
 npm run build
+npm run check:bundle  # 入口 gzip ≤ 135 kB，其余分包 ≤ 40 kB
+npm run test:visual   # 本机平台基线；npm run test:visual:linux 在 CI 的 Linux 容器中运行
+# 后端接口变化后：根目录运行 export_openapi.py，再在 frontend 目录 npm run api:types
 npx playwright install chromium
 $env:E2E_BASE_URL = 'http://localhost:8080'
 $env:E2E_MODEL_BASE_URL = 'http://mock-provider:8099/v1'
 npm run test:e2e
 ```
 
-后端共 237 个 pytest 用例，在随机 PostgreSQL schema 中执行真实迁移；指标与标准化模块的行/分支覆盖门槛均为 90%。主要回归范围：金额精度与分摊守恒、CSV/XLSX 等价、字段与资源边界、版本冻结、三种协议的真实 HTTP 与子进程管道、崩溃恢复与取消、出站策略、凭证加密与轮换、伪造证据、定时与推送、授权升级、英文导出、关联清理和离线导出。测试角色需要创建/删除 schema 权限，PDF 测试需要 Chromium。浏览器测试覆盖导入、看板、模型、报告、导出、运维和双语，关闭 trace 以避免采集配置表单里的凭证；不配置 `E2E_MODEL_BASE_URL` 时跳过模型流程。
+后端共 272 个 pytest 用例，在随机 PostgreSQL schema 中执行真实迁移，每个 JSON 响应都与声明的响应结构比对；前端有 24 个 Vitest 用例、24 张视觉回归截图和 7 个 Playwright 端到端用例。指标与标准化模块的行/分支覆盖门槛均为 90%。主要回归范围：金额精度与分摊守恒、结构与费率分解守恒、计算型绑定的单位规则、假设判定与跨期复核、补丁修复与审稿、CSV/XLSX 等价、字段与资源边界、版本冻结、三种协议的真实 HTTP 与子进程管道、崩溃恢复与取消、出站策略、凭证加密与轮换、伪造证据、定时与推送、授权升级、英文导出、关联清理和离线导出。测试角色需要创建/删除 schema 权限，PDF 测试需要 Chromium。浏览器测试覆盖导入、看板、模型、报告、导出、运维和双语，关闭 trace 以避免采集配置表单里的凭证；不配置 `E2E_MODEL_BASE_URL` 时跳过模型流程。
 
 ### Agent 评测
 
-评测代码在 [app/evals](../backend/app/evals)，用例在 [evals/cases.json](../backend/evals/cases.json)。十个用例各用固定随机种子生成合成订单并注入有标注的业务变化：平稳周、退款激增、销售下滑、负毛利、缺成本、销售集中、单日离群、促销期间的销售激增（附商家备注）、英文报告，以及一条退款追问。
+评测代码在 [app/evals](../backend/app/evals)，用例在 [evals/cases.json](../backend/evals/cases.json)。24 个用例各用固定随机种子生成 56 天合成订单并注入有标注的业务变化：平稳周、退款激增（中英文）、销售下滑、负毛利、缺成本、销售集中、单日离群、促销备注、全店涨价、每单件数增加、低毛利商品放量（结构变化）、单品成本上涨（费率变化）、连续多周下滑、小样本商品剧烈波动、退款激增与成本上涨叠加、与真实原因无关的促销备注、商品名与备注中的指令注入、跨期复核、上期建议到期复查，以及退款追问、缺数据追问、跨范围追问和指代不明的追问。最后一个标为 `live_only`：正确回答是反问，脚本化策略无法代表，离线套件跳过并说明原因。
+
+合成数据生成器支持的变化见 [synthetic.py](../backend/app/evals/synthetic.py) 开头：退款激增、销量下滑或激增、集中、单日离群、负毛利、缺成本、涨价、每单件数、成本结构、本期成本上涨、单品基础销量、整体规模、逐周趋势、商品名覆盖。不适用的变化不消耗随机数，新增变化类型不会改变已有用例的数据。
 
 ```powershell
 # backend 目录，无需数据库或模型服务
 uv run python -m app.evals run --gate
-# 真实模型：使用已测试可用的模型配置，可另配一个评审模型
-uv run python -m app.evals run --suite live --model-config <id> --judge-config <id>
+# 真实模型：使用已测试可用的模型配置，可另配一个评审模型；每个用例重复三次
+uv run python -m app.evals run --suite live --model-config <id> --judge-config <id> --repeat 3
+# 花费上限：请求数或 token 数（含评审）在下一个用例可能超过时停止，已开始的用例会跑完
+uv run python -m app.evals run --suite live --model-config <id> --repeat 3 --max-tokens 15000000
+# 按用例对比两次运行（提示词、语法或模型变化前后）
+uv run python -m app.evals compare <before.json> <after.json> --out diff.md
+# 方向一致性检查在人工标注句子上的精度与召回
+uv run python -m app.evals direction
 # 人工校准评审：导出、填写人工分后计算一致性
 uv run python -m app.evals export-labels --run <run.json> --out labels.csv
 uv run python -m app.evals calibrate --labels labels.csv
 ```
 
+用例有两类标准答案。**确定性答案**与模型无关，任何策略下都必须全部命中：
+
+| 答案 | 检查 |
+| --- | --- |
+| `verdicts` | 服务端候选假设的判定（如退款激增时“退款集中在单个商品”为数据支持） |
+| `dominance` | 分解中占主导的效应：毛利率与退款占比为结构或费率，客单价为件单价或每单件数 |
+| `streaks` | 历史窗口中指标连续同向变化的方向和最少期数 |
+| `low_sample` | 必须标为小样本的商品 |
+| `recheck` | 本用例的假设在后续一期数据上重新判定的结果 |
+| `intent` | 追问的路由（缺数据、其他范围由服务端直接回答，不调用模型） |
+
+**模型答案**衡量模型的分析：`causes` 是注入的原因，每个原因给出若干可接受的匹配（发现引用的数据支持假设涉及某个 SKU、某个假设 ID、某个工具与指标，或者某个假设被列入已排除的原因）；`distractors` 是不应被引用的干扰项（某个 SKU，或某条商家备注）。
+
 | 指标 | 含义 |
 | --- | --- |
 | `success` / `first_pass` | 通过证据校验的比例 / 无需修复即通过的比例 |
-| `entity_coverage` | 用例要求点名的 SKU 出现在报告中的比例 |
-| `rule_recall` | 规则引擎触发了用例设计要触发的规则（检验合成数据与规则口径一致） |
-| `rule_mention` | 报告通过绑定提到了这些规则 |
-| `tool_effectiveness` | 模型发起且成功的工具调用中，结果被最终报告引用的比例 |
-| `forbidden_hits` | 报告出现禁止断言的次数 |
-| `judge_*` | 评审分（1–5）：假设合理性、建议可执行性、具体程度 |
+| `pipeline_accuracy` | 确定性答案的命中率（门控；任何一项未命中都使门禁失败），另按类别给出 `pipeline_verdict` 等 |
+| `cause_recall` | 注入原因被发现引用的比例（门控） |
+| `distractor_misuse` | 干扰项被引用的次数（不得增加） |
+| `entity_coverage` / `rule_recall` / `rule_mention` | 点名用例要求的 SKU / 规则引擎触发了设计要触发的规则 / 报告通过绑定提到了这些规则 |
+| `tool_effectiveness` | 成功的工具调用与假设检验中，结果被报告引用的比例 |
+| `hypothesis_tests` / `hypothesis_validity` | 每个用例的假设检验次数 / 能被服务端执行的比例，失败的按错误码汇总在 `test_errors` |
+| `hypothesis_cited` / `ruled_out_listed` | 数据支持的假设被发现引用的比例（门控）/ 被否定的假设列入已排除原因的比例 |
+| `deepened` / `sku_drill` | 是否用上了第二轮假设 / 是否下钻到具体 SKU |
+| `overclaim_rate` | 引用数据支持假设的发现中，正文写成“导致、因为、caused by”等确定因果的比例（不得增加） |
+| `derived_bindings` / `derive_errors` | 计算型绑定数 / 因派生计算规则被要求修复的次数 |
+| `repairs_patch` / `repairs_full` / `patch_success` | 局部修复与整体重写次数，以及有局部修复时最终通过的比例 |
+| `lint_issues` / `review_applied` | 确定性审稿发现的问题总数（不得增加）/ 审稿后的局部修复被采纳的比例 |
+| `requests`、`latency_p50_ms` / `latency_p90_ms`、`input_tokens` / `output_tokens`、`cache_ratio` | 请求数、模型请求耗时分位、token 用量和提示缓存命中比例 |
+| `forbidden_hits` | 报告出现禁止断言的次数（不得增加）；说明缺少哪类数据的句子（“当前没有广告数据，需商家自行核对”）不计入 |
+| `followup_mention` / `kind_match` / `note_mention` | 到期建议中复查结论被绑定写进报告的比例 / 追问回复的类型（回答、反问、建议范围）正确 / 用例要求时引用了商家备注 |
+| `judge_*` | 评审分（1–5）：假设合理性、建议可执行性、具体程度、可证伪性、排除原因的价值 |
 
-离线套件用脚本化的参考策略驱动真实的工具、循环和校验，不发起任何网络请求，评审使用标注为 `heuristic` 的启发式打分；`--protocol` 可选择线格式。CI 运行 `--gate`：任一门控指标比 [baseline.json](../backend/evals/baseline.json) 低 0.05 以上，或禁止断言增加，即失败。修改提示词、语法或工具后如指标有意变化，用 `--update-baseline` 更新基线并在提交中说明。离线套件衡量的是流水线；模型本身的效果要用 `--suite live` 对真实模型测，结果写入 `.cache/evals/`。真实评审只看到服务端渲染后的报告文本和用例描述，不接触凭证和原始订单；`calibrate` 计算评审与人工的平均绝对误差和 Spearman 相关。
+离线套件用脚本化的参考策略驱动真实的工具、假设检验、循环和校验，不发起任何网络请求，评审使用标注为 `heuristic` 的启发式打分；`--protocol` 可选择线格式。CI 运行 `--gate`：任一门控指标比 [baseline.json](../backend/evals/baseline.json) 低 0.05 以上、任一“不得增加”的指标增加，或任一确定性答案未命中，即失败。修改提示词、语法或工具后如指标有意变化，用 `--update-baseline` 更新基线并在提交中说明。离线套件衡量的是流水线与服务端判定；模型本身的效果要用 `--suite live` 对真实模型测，结果默认写入 `.cache/evals/`，去除凭证后的基线归档在 [docs/evals](evals/README.md)。
+
+真实模型不设采样参数，单次结果有波动：`--repeat N` 把每个用例跑 N 次，运行结果增加 `spread`，列出每个指标在各次重复之间的均值、标准差和范围。`compare` 先把重复的结果按用例平均，再输出 Markdown：汇总指标的前后值与变化方向，以及每个结果有变化的用例（成功、命中率、错误码、引用和排除的假设、增删的句子）；耗时只在其他变化旁显示，不单独算作变化。真实评审只看到服务端渲染后的报告文本和用例描述，不接触凭证和原始订单；`calibrate` 计算评审与人工的平均绝对误差和 Spearman 相关。被花费上限截停的运行在结果中记录 `stopped`（原因、已完成次数、花费），汇总只覆盖已完成的部分，波动只按完整的重复轮次计算；截停的运行不能更新基线，门禁直接失败。
+
+`DIRECTION_MISMATCH` 目前只是审稿提示。[evals/direction.json](../backend/evals/direction.json) 收录 44 条人工标注的中英文句子，`direction` 子命令给出精度和召回（当前均为 81%，误报集中在“没有下降”这类否定句），这是决定是否把它升级为硬性校验的依据：硬性校验的误报会拒绝一份正确的报告。
 
 ### 追踪与调试留存
 
@@ -488,7 +573,7 @@ python scripts/release.py
 
 Linux/macOS 将解释器路径改为 `backend/.venv/bin/python`。打包按白名单排除密钥、运行数据、依赖和缓存，生成源码 ZIP、MANIFEST、SHA256SUMS；不自动发布 GitHub 或镜像。
 
-CI 定义在 [.github/workflows/ci.yml](../.github/workflows/ci.yml)，包含三个 job：后端（版本一致性、发布边界与密钥检查、pip-audit、ruff、迁移检查、pytest 与覆盖率门槛、离线评测门禁）、前端（Vitest、构建、npm audit）、Compose 浏览器测试（带模拟模型的完整实例、冒烟测试、Playwright 端到端、容器内密钥扫描）。Release 工作流复用这些检查后生成源码包。增加数据库字段需新增 Alembic 迁移；变更金额算法、缓存语义、提示词、语法或规则时更新对应版本、独立期望值和评测基线。
+CI 定义在 [.github/workflows/ci.yml](../.github/workflows/ci.yml)，包含三个 job：后端（版本一致性、OpenAPI 快照未过期、发布边界与密钥检查、pip-audit、ruff、迁移检查、pytest 与覆盖率门槛、离线评测门禁）、前端（Prettier、ESLint、翻译完整性、生成类型未过期、Vitest 单元与组件测试、构建、包体积预算、npm audit）、Compose 浏览器测试（带模拟模型的完整实例、冒烟测试、Playwright 端到端、容器内密钥扫描）。Release 工作流复用这些检查后生成源码包。增加数据库字段需新增 Alembic 迁移；变更金额算法、缓存语义、提示词、语法或规则时更新对应版本、独立期望值和评测基线。
 
 ## 运维与排障
 

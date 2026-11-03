@@ -13,6 +13,7 @@ FROZEN_MODEL_FIELDS = (
     "name",
     "base_url",
     "model_name",
+    "review_model_name",
     "protocol",
     "revision",
     "timeout_seconds",

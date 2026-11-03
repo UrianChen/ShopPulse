@@ -44,6 +44,8 @@ EXTENSIONS = {
     ".py",
     ".tsx",
     ".ts",
+    ".js",
+    ".mjs",
     ".css",
     ".html",
     ".json",
@@ -79,7 +81,7 @@ def source_files(root):
                 yield from walk(path)
             elif (
                 path.suffix in EXTENSIONS
-                or path.name in {"Dockerfile", ".gitignore", ".python-version"}
+                or path.name in {"Dockerfile", ".gitignore", ".python-version", ".prettierignore"}
             ) and path.name not in {"coverage.json", "credentials.json"}:
                 yield path
 

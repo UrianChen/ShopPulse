@@ -6,10 +6,12 @@ from zoneinfo import ZoneInfo
 
 import psutil
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api import responses as out
 from app.api.dependencies import WorkspaceContext, current_workspace, envelope, mutation_workspace
 from app.api.imports import scoped
 from app.api.routes import job_data
@@ -20,7 +22,7 @@ from app.ingestion.storage import storage_root
 from app.ops import jobs, lifecycle
 from app.ops.audit import audit
 
-router = APIRouter(prefix="/api/v1/operations")
+router = APIRouter(prefix="/api/v1/operations", default_response_class=JSONResponse)
 
 
 class SettingsInput(BaseModel):
@@ -56,7 +58,7 @@ def settings_data(row):
     }
 
 
-@router.get("/settings")
+@router.get("/settings", response_model=out.Envelope[out.WorkspaceSettings])
 def settings_get(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -65,7 +67,7 @@ def settings_get(
     return envelope(request, settings_data(db.get(Workspace, actor.workspace_id)))
 
 
-@router.put("/settings")
+@router.put("/settings", response_model=out.Envelope[out.WorkspaceSettings])
 def settings_put(
     payload: SettingsInput,
     request: Request,
@@ -83,7 +85,7 @@ def settings_put(
     return envelope(request, settings_data(row))
 
 
-@router.get("/status")
+@router.get("/status", response_model=out.Envelope[out.ServiceStatus])
 def status(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -130,7 +132,7 @@ def status(
     )
 
 
-@router.get("/audit")
+@router.get("/audit", response_model=out.Envelope[list[out.AuditEntry]])
 def audit_get(
     request: Request,
     offset: int = 0,
@@ -155,7 +157,7 @@ def audit_get(
     )
 
 
-@router.post("/jobs/{job_id}/{action}")
+@router.post("/jobs/{job_id}/{action}", response_model=out.Envelope[out.Job])
 def job_action(
     job_id: uuid.UUID,
     action: Literal["cancel", "retry"],
@@ -178,7 +180,7 @@ class Confirm(BaseModel):
     confirmation: Literal["确认删除"]
 
 
-@router.get("/deletion/{kind}/{target}")
+@router.get("/deletion/{kind}/{target}", response_model=out.Envelope[out.DeletionPlan])
 def deletion_preview(
     kind: Literal["report", "dataset", "cost", "upload"],
     target: uuid.UUID,
@@ -189,7 +191,7 @@ def deletion_preview(
     return envelope(request, lifecycle.deletion_plan(db, actor, kind, target))
 
 
-@router.post("/deletion/{kind}/{target}")
+@router.post("/deletion/{kind}/{target}", response_model=out.Envelope[out.DeletionResult])
 def deletion_execute(
     kind: Literal["report", "dataset", "cost", "upload"],
     target: uuid.UUID,
@@ -209,7 +211,7 @@ def deletion_execute(
     return envelope(request, {"deleted": plan["counts"], "pending_files": pending})
 
 
-@router.get("/cleanup")
+@router.get("/cleanup", response_model=out.Envelope[out.CleanupPlan])
 def cleanup_preview(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -218,7 +220,7 @@ def cleanup_preview(
     return envelope(request, lifecycle.cleanup_plan(db, actor.workspace_id))
 
 
-@router.post("/cleanup")
+@router.post("/cleanup", response_model=out.Envelope[out.CleanupResult])
 def cleanup_execute(
     payload: Confirm,
     request: Request,

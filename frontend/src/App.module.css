@@ -1,0 +1,207 @@
+.app-shell {
+  min-height: 100vh;
+}
+.sidebar {
+  width: 224px;
+  position: fixed;
+  inset: 0 auto 0 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-line);
+  padding: var(--space-28) var(--space-18) var(--space-22);
+  z-index: 20;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: 26px;
+  font-weight: 750;
+  letter-spacing: -1px;
+  padding: 0 var(--space-6);
+}
+.brand-icon {
+  display: inline-grid;
+  place-items: center;
+  height: 34px;
+  width: 34px;
+  border-radius: var(--radius-10);
+  background: var(--color-accent);
+  color: var(--color-green-90);
+  margin-right: var(--space-3);
+}
+.brand-dot {
+  margin-left: -7px;
+  color: var(--color-green-59);
+}
+.workspace-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  margin: var(--space-32) 0 var(--space-24);
+  padding: var(--space-12);
+  background: var(--color-page);
+  border: 1px solid var(--color-soft);
+  border-radius: var(--radius-10);
+}
+.workspace-avatar {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-7);
+  color: var(--color-green-41);
+  background: var(--color-sage-92);
+  font-size: 16px;
+  font-weight: 600;
+}
+.workspace-switch strong {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar nav {
+  display: grid;
+  gap: var(--space-6);
+}
+.sidebar nav a {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  min-height: 44px;
+  padding: var(--space-11) var(--space-14);
+  color: var(--color-sage-45-3);
+  border-radius: var(--radius-8);
+  font-size: 16px;
+  font-weight: 500;
+}
+.sidebar nav a:hover {
+  background: var(--color-page);
+  color: var(--color-green-30);
+}
+.sidebar nav a.active {
+  background: var(--color-sage-92);
+  color: var(--color-green-32);
+  font-weight: 600;
+}
+.sidebar nav a:nth-child(5) {
+  margin-top: var(--space-22);
+}
+.sidebar-bottom {
+  display: flex;
+  align-items: center;
+  gap: var(--space-7);
+  margin-top: auto;
+  padding: var(--space-30) var(--space-8) 0;
+  font-size: 13px;
+  color: var(--color-sage-49-3);
+}
+.sidebar-bottom > span:last-child {
+  margin-left: auto;
+}
+.dot {
+  display: inline-block;
+  height: 7px;
+  width: 7px;
+  background: var(--color-green-58);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.main-shell {
+  margin-left: 224px;
+  min-width: 0;
+}
+.topbar {
+  height: 68px;
+  padding: 0 var(--space-36);
+  background: var(--color-gray-100-a85);
+  border-bottom: 1px solid var(--color-line);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-16);
+}
+.breadcrumb {
+  color: var(--color-muted);
+  font-size: 15px;
+}
+.language-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  color: var(--color-sage-54);
+}
+.language-control > div {
+  display: flex;
+  padding: var(--space-3);
+  border: 1px solid var(--color-line);
+  background: var(--color-page);
+  border-radius: var(--radius-8);
+}
+.language-control button {
+  min-width: 45px;
+  height: 32px;
+  padding: var(--space-4) var(--space-10);
+  border-radius: var(--radius-5);
+  background: none;
+  color: var(--color-sage-47-3);
+  font-size: 14px;
+  font-weight: 600;
+}
+.language-control button[aria-pressed='true'] {
+  background: var(--color-surface);
+  color: var(--color-green-32);
+  box-shadow: var(--shadow-card);
+}
+.content {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: var(--space-32) var(--space-36) 48px;
+}
+.content:focus {
+  outline: 0;
+}
+.skip-link {
+  position: fixed;
+  top: -100px;
+  left: 16px;
+  padding: var(--space-12) var(--space-18);
+  background: var(--color-accent);
+  color: var(--color-surface);
+  z-index: 100;
+  border-radius: var(--radius-8);
+}
+.skip-link:focus {
+  top: 12px;
+}
+.not-found {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-22);
+  padding: 70px var(--space-24);
+  text-align: center;
+}
+@media (min-width: 1600px) {
+  .content {
+    padding-top: 42px;
+  }
+}
+@media (max-width: 1100px) {
+  .sidebar {
+    width: 196px;
+    padding-inline: var(--space-12);
+  }
+  .main-shell {
+    margin-left: 196px;
+  }
+  .content {
+    padding: var(--space-26) var(--space-24) var(--space-36);
+  }
+  .topbar {
+    padding-inline: var(--space-24);
+  }
+}

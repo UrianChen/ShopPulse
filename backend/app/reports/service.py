@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -39,17 +39,25 @@ from app.reports.followups import (
     record_evaluations,
 )
 from app.reports.grammar import EvidenceError
-from app.reports.schema import BUDGETS, GRAMMAR_VERSION, PROMPT_VERSION, RULE_VERSION
+from app.reports.hypothesis import seed
+from app.reports.schema import (
+    GRAMMAR_VERSION,
+    PROMPT_VERSION,
+    RULE_VERSION,
+    budgets_for,
+)
 from app.reports.tools import (
     LABELS,
     ToolError,
     ToolRegistry,
+    history_payload,
     limitations,
     metric_facts,
     topic_facts,
 )
 
 FINAL = {"ready", "ready_with_warnings", "failed"}
+HISTORY_WINDOWS = 8
 CHILD_LIMIT = 16 * 1024 * 1024
 FALLBACK = {
     "zh": {
@@ -183,10 +191,119 @@ def persist_evidence(db, evidence):
             )
 
 
-def deterministic(report, dataset, context, registry):
+def history_windows(query):
+    """Up to eight earlier windows of the report's length, oldest first, within 366 days."""
+    start = date.fromisoformat(query["start"])
+    days = (date.fromisoformat(query["end_exclusive"]) - start).days
+    count = min(HISTORY_WINDOWS, 366 // days)
+    if count < 2:
+        return [], days
+    return [
+        [
+            (start - timedelta(days=days * k)).isoformat(),
+            (start - timedelta(days=days * (k - 1))).isoformat(),
+        ]
+        for k in range(count, 0, -1)
+    ], days
+
+
+def prepare_history(job):
+    """Compute the frozen history window before the report transaction (subprocess, no locks)."""
+    if job.type != "build_report":
+        return None
+    from app.ingestion.service import isolated
+    from app.metrics.schema import MetricQuery
+    from app.metrics.service import load_rows
+
+    with Session(db_module.engine()) as db:
+        report = db.get(Report, uuid.UUID(job.payload["report_id"]))
+        if report is None or report.content is not None:
+            return None
+        snapshot = db.get(MetricSnapshot, report.metric_snapshot_id)
+        if snapshot is None or snapshot.result is None:
+            return None
+        windows, days = history_windows(report.query)
+        if not windows:
+            return None
+        dataset = db.get(DatasetVersion, report.dataset_id)
+        query = MetricQuery.model_validate(
+            {
+                "dataset_id": str(dataset.id),
+                "start": windows[0][0],
+                "end_exclusive": windows[-1][1],
+                "comparison": "none",
+                "skus": report.query.get("skus") or [],
+            }
+        )
+        rows = load_rows(db, dataset, query)
+        request = {"rows": rows, "snapshot": dataset.snapshot, "windows": windows}
+        workspace_id, result = report.workspace_id, snapshot.result
+    raw = isolated(request, workspace_id, module="app.metrics.runner", memory_mib=1536, job=job)
+    if raw.get("error") or not isinstance(raw.get("windows"), list):
+        return None
+    if not any(w["coverage_complete"] for w in raw["windows"]):
+        return None  # Nothing earlier is covered: no history evidence rather than empty rows.
+    return history_payload(raw, result, days)
+
+
+def prior_hypotheses(db, report):
+    """Supported and refuted hypotheses of the previous revision in this series."""
+    prior = db.scalar(
+        select(Report)
+        .where(
+            Report.series_id == report.series_id,
+            Report.revision < report.revision,
+            Report.status.in_(["ready", "ready_with_warnings"]),
+        )
+        .order_by(Report.revision.desc())
+        .limit(1)
+    )
+    if prior is None or not prior.content:
+        return []
+    items = [
+        h
+        for h in prior.content.get("hypotheses") or []
+        if h.get("state") in {"supported", "refuted"} and h.get("spec")
+    ]
+    items.sort(key=lambda h: (h["state"] != "supported", h.get("wave", 0) == 0))
+    return [
+        {
+            "id": h["id"],
+            "statement": (h.get("statement") or "")[:400] or None,
+            "previous_state": h["state"],
+            "source_report_id": str(prior.id),
+            "spec": h["spec"],
+        }
+        for h in items[:5]
+    ]
+
+
+def hypothesis_items(evidence, previous=()):
+    """Latest verdict per hypothesis id, keeping the anchored spec for next period's recheck."""
+    found = {item["id"]: item for item in previous}
+    for ev in evidence:
+        if ev["tool"] != "test_hypothesis":
+            continue
+        p = ev["payload"]
+        found[p["id"]] = {
+            "id": p["id"],
+            "statement": p["statement"],
+            "state": p["state"],
+            "reason": p["reason"],
+            "quality": p["quality"],
+            "wave": p["wave"],
+            "evidence_id": ev["evidence_id"],
+            "test_evidence_id": p["test_evidence_id"],
+            "spec": p["spec"],
+        }
+    return list(found.values())
+
+
+def deterministic(report, dataset, context, registry, prior=()):
     core = registry.core()
     result = context["result"]
     language = getattr(report, "language", None) or "zh"
+    _, rechecked = seed(registry, core, language, list(prior))
     facts = metric_facts(registry.evidence, language)
     summary = [
         render(f, registry.evidence, result["currency"], result["currency_exponent"], language)
@@ -194,14 +311,30 @@ def deterministic(report, dataset, context, registry):
     ]
     followups = core.get("check_recommendation")
     notes = core.get("get_merchant_notes")
+    charts = [
+        {
+            "id": "sales_trend",
+            "kind": "trend",
+            "evidence_id": core["get_sales_trend"]["evidence_id"],
+        },
+        {
+            "id": "sales_contributions",
+            "kind": "contributions",
+            "evidence_id": core["decompose_sales_change"]["evidence_id"],
+        },
+    ]
+    if core.get("get_history"):
+        charts.append(
+            {"id": "history", "kind": "history", "evidence_id": core["get_history"]["evidence_id"]}
+        )
     return {
-        "schema_version": "2.0",
+        "schema_version": "3.0",
         "report_id": str(report.id),
         "revision": report.revision,
         "title": report.title,
         "language": language,
         "generation_mode": "deterministic",
-        "template_version": "2.0",
+        "template_version": "3.0",
         "snapshot": {
             "dataset_id": str(dataset.id),
             "dataset_fingerprint": dataset.fingerprint,
@@ -227,18 +360,7 @@ def deterministic(report, dataset, context, registry):
             }
             for key, label in LABELS.items()
         ],
-        "charts": [
-            {
-                "id": "sales_trend",
-                "kind": "trend",
-                "evidence_id": core["get_sales_trend"]["evidence_id"],
-            },
-            {
-                "id": "sales_contributions",
-                "kind": "contributions",
-                "evidence_id": core["decompose_sales_change"]["evidence_id"],
-            },
-        ],
+        "charts": charts,
         "summary": summary,
         "products": core["rank_products"]["payload"]["items"],
         "anomalies": core["detect_anomalies"]["payload"],
@@ -253,6 +375,20 @@ def deterministic(report, dataset, context, registry):
         ]
         if notes
         else [],
+        "hypotheses": hypothesis_items(registry.evidence),
+        "hypothesis_recheck": [
+            {**item, "evidence_id": rechecked["evidence_id"]}
+            for item in rechecked["payload"]["items"]
+        ]
+        if rechecked
+        else [],
+        "ruled_out": [],
+        "history": {
+            **core["get_history"]["payload"],
+            "evidence_id": core["get_history"]["evidence_id"],
+        }
+        if core.get("get_history")
+        else None,
         "findings": [],
         "recommendations": [
             {
@@ -498,6 +634,7 @@ def append_step(run_id, step):
 
 def execute(job):
     started = time.monotonic()
+    history = prepare_history(job)
     with Session(db_module.engine()) as db, db.begin():
         current = db.scalar(select(Job).where(*owned(job)).with_for_update())
         if not current:
@@ -526,6 +663,8 @@ def execute(job):
             r.usage.get("requests_reserved", 0)
             for r in db.scalars(select(AgentRun).where(AgentRun.job_id == job.id))
         )
+        kind = "question" if message_row else "report"
+        budgets = budgets_for(kind)
         # Previous interrupted attempts keep their trace but cannot publish a result.
         for old in db.scalars(
             select(AgentRun).where(
@@ -539,19 +678,24 @@ def execute(job):
             report_id=report.id,
             job_id=job.id,
             attempt=job.attempt,
-            budgets=BUDGETS,
+            budgets=budgets,
             steps=[{"phase": "computing"}],
             usage={},
         )
         db.add(run)
         db.flush()
         context = context_for(db, report)
+        if history:
+            context["history"] = history
         existing = report_evidence(db, report)
         registry = ToolRegistry(
             context,
             str(report.id),
             str(run.id),
             cache={(e["tool"], e["args_hash"]): e for e in existing},
+            limit=budgets["tools"],
+            include_names=(report.model_snapshot or {}).get("product_name_mode") == "include_names",
+            test_limit=budgets["tests"],
         )
         if message_row or report.content:
             registry.evidence = existing
@@ -564,7 +708,11 @@ def execute(job):
                 message_row.status = "running"
         else:
             report.content = deterministic(
-                report, db.get(DatasetVersion, report.dataset_id), context, registry
+                report,
+                db.get(DatasetVersion, report.dataset_id),
+                context,
+                registry,
+                prior_hypotheses(db, report),
             )
             persist_evidence(db, registry.evidence)
             report.status = "analyzing"
@@ -580,7 +728,7 @@ def execute(job):
         run.usage = {
             "tools": 0,
             "core_tools": core_count,
-            "requests_reserved": BUDGETS["requests"] if credential else 0,
+            "requests_reserved": budgets["requests"] if credential else 0,
         }
         base_steps = [
             {"phase": "computing", "tools": core_count, "evidence_count": len(registry.evidence)},
@@ -593,7 +741,7 @@ def execute(job):
             "report_id": str(report.id),
             "run_id": str(run.id),
             "evidence": registry.evidence,
-            "kind": "question" if message_row else "report",
+            "kind": kind,
             "intent": intent,
             "language": report.language or "zh",
             "dataset_id": result["dataset_id"],
@@ -642,7 +790,7 @@ def execute(job):
             try:
                 output = model_process(
                     {**request, **credential},
-                    BUDGETS["seconds"] - 5 - (time.monotonic() - started),
+                    budgets["seconds"] - 5 - (time.monotonic() - started),
                     cancelled,
                     tools=registry.execute,
                     on_event=lambda step: append_step(run_id, step),
@@ -669,7 +817,8 @@ def execute(job):
                 )
             except (EvidenceError, ValueError, TypeError, KeyError):
                 output["error_code"] = "PARENT_VALIDATION_FAILED"
-        output["extra_evidence"] = registry.evidence[core_count:]
+        derived = (output["analysis"] or {}).pop("derived_evidence", [])
+        output["extra_evidence"] = registry.evidence[core_count:] + derived
         output.setdefault("usage", {})["tools"] = registry.calls
     commit(job, run_id, output, intent, base_steps, trace)
 
@@ -759,6 +908,9 @@ def commit(job, run_id, output, intent, base_steps=None, trace=None):
             content["model_error_code"] = error
             if output["analysis"]:
                 content.update(output["analysis"])
+            content["hypotheses"] = hypothesis_items(
+                output["extra_evidence"], content.get("hypotheses") or []
+            )
             content["evidence_index"] = content["evidence_index"] + new_index
             content["run_id"] = str(run_id)
             report.content = content

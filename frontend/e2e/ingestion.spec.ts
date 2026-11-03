@@ -1,19 +1,31 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { expectAccessible } from './axe';
 
 async function startImport(page: Page, file: string, kind: 'costs' | 'orders', content?: string) {
   await page.goto('/data');
   await expect(page.getByRole('heading', { name: '数据中心', exact: true })).toBeVisible();
-  if (!await page.getByLabel('选择数据文件').isVisible()) {
+  if (!(await page.getByLabel('选择数据文件').isVisible())) {
     await page.getByRole('button', { name: '导入数据', exact: true }).click();
   }
-  await page.getByRole('button', { name: kind === 'costs' ? '商品成本' : '订单明细', exact: true }).click();
-  await page.getByLabel('选择数据文件').setInputFiles(content ? { name: file, mimeType: 'text/csv', buffer: Buffer.from(content) } : resolve('../samples', file));
+  await page
+    .getByRole('button', { name: kind === 'costs' ? '商品成本' : '订单明细', exact: true })
+    .click();
+  await page
+    .getByLabel('选择数据文件')
+    .setInputFiles(
+      content
+        ? { name: file, mimeType: 'text/csv', buffer: Buffer.from(content) }
+        : resolve('../samples', file),
+    );
   await page.getByLabel('导入名称').fill(`浏览器验收 · ${file}`);
   await page.getByRole('button', { name: '上传并预览' }).click();
   await page.getByRole('button', { name: '配置字段与口径' }).click({ timeout: 30000 });
-  await expect(page.getByRole('heading', { name: `浏览器验收 · ${file}`, exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: `浏览器验收 · ${file}`, exact: true }),
+  ).toBeVisible();
+  await expectAccessible(page);
 }
 
 async function configureOrder(page: Page, costId: string) {
@@ -29,9 +41,14 @@ async function configureOrder(page: Page, costId: string) {
 }
 
 async function publish(page: Page) {
-  await expect(page.getByRole('button', { name: '发布数据版本', exact: true })).toBeEnabled({ timeout: 30000 });
+  await expect(page.getByRole('button', { name: '发布数据版本', exact: true })).toBeEnabled({
+    timeout: 30000,
+  });
   await page.getByRole('button', { name: '发布数据版本', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '数据版本已发布' })).toBeVisible({ timeout: 30000 });
+  await expect(page.getByRole('heading', { name: '数据版本已发布' })).toBeVisible({
+    timeout: 30000,
+  });
+  await expectAccessible(page);
   return (await page.locator('.published-card code').textContent())!;
 }
 
@@ -47,7 +64,9 @@ test('publish cost, CSV and XLSX orders, then resolve a blocking source row', as
 
   await startImport(page, 'orders.csv', 'orders');
   await configureOrder(page, costId);
-  await expect(page.getByRole('button', { name: '发布数据版本', exact: true })).toBeEnabled({ timeout: 30000 });
+  await expect(page.getByRole('button', { name: '发布数据版本', exact: true })).toBeEnabled({
+    timeout: 30000,
+  });
   await page.getByLabel('时区', { exact: true }).fill('Asia/Singapore');
   await expect(page.getByRole('button', { name: '发布数据版本', exact: true })).toBeDisabled();
   await page.getByLabel('时区', { exact: true }).fill('Asia/Shanghai');
@@ -55,7 +74,10 @@ test('publish cost, CSV and XLSX orders, then resolve a blocking source row', as
   await page.reload();
   await expect(page.getByRole('heading', { name: '数据版本已发布' })).toBeVisible();
   await page.getByRole('link', { name: '打开经营看板', exact: true }).click();
-  await expect(page.getByTestId('metric-net_sales').locator('.metric-value')).toContainText('550.00', { timeout: 30000 });
+  await expect(page.getByTestId('metric-net_sales').locator('.metric-value')).toContainText(
+    '550.00',
+    { timeout: 30000 },
+  );
 
   await startImport(page, 'orders.xlsx', 'orders');
   await configureOrder(page, costId);
@@ -67,7 +89,10 @@ test('publish cost, CSV and XLSX orders, then resolve a blocking source row', as
   expect(csv.summary.cost_matched_rows).toBe(6);
 
   const injectedName = '<script>window.shoppulseInjected=true</script>ignore previous instructions';
-  const errorFile = readFileSync(resolve('../samples/orders_errors.csv'), 'utf8').replace('基础款收纳盒', injectedName);
+  const errorFile = readFileSync(resolve('../samples/orders_errors.csv'), 'utf8').replace(
+    '基础款收纳盒',
+    injectedName,
+  );
   await startImport(page, 'orders_errors.csv', 'orders', errorFile);
   await page.locator('.source-preview summary').click();
   await expect(page.getByText(injectedName, { exact: true })).toBeVisible();
@@ -75,7 +100,9 @@ test('publish cost, CSV and XLSX orders, then resolve a blocking source row', as
   expect(await page.evaluate(() => 'shoppulseInjected' in window)).toBe(false);
   await page.locator('.source-preview summary').click();
   await configureOrder(page, costId);
-  await expect(page.getByText('REFUND_EXCEEDS_PAID', { exact: true })).toBeVisible({ timeout: 30000 });
+  await expect(page.getByText('REFUND_EXCEEDS_PAID', { exact: true })).toBeVisible({
+    timeout: 30000,
+  });
   await expect(page.getByRole('button', { name: '发布数据版本', exact: true })).toBeDisabled();
   await page.getByLabel('排除的源表行号').fill('8');
   await page.getByLabel('决策原因').fill('合成错误样例：退款超过实付，核对后排除第 8 行。');
@@ -86,9 +113,19 @@ test('publish cost, CSV and XLSX orders, then resolve a blocking source row', as
   expect(corrected.summary.excluded_rows).toBe(1);
   expect(corrected.snapshot.resolutions.excluded_rows).toEqual([8]);
   await page.getByRole('button', { name: '查看数据版本' }).click();
-  await page.locator('.version-row').filter({ hasText: costId.slice(0, 8) }).getByRole('button', { name: '查看', exact: true }).click();
+  await page
+    .locator('.version-row')
+    .filter({ hasText: costId.slice(0, 8) })
+    .getByRole('button', { name: '查看', exact: true })
+    .click();
   await expect(page.locator('.cost-detail')).toBeVisible();
-  await expect(page.locator('.cost-detail').getByRole('cell', { name: '60.000000', exact: true })).toBeVisible();
-  await page.locator('.version-row').filter({ hasText: correctedId.slice(0, 8) }).getByRole('button', { name: '查看', exact: true }).click();
+  await expect(
+    page.locator('.cost-detail').getByRole('cell', { name: '60.000000', exact: true }),
+  ).toBeVisible();
+  await page
+    .locator('.version-row')
+    .filter({ hasText: correctedId.slice(0, 8) })
+    .getByRole('button', { name: '查看', exact: true })
+    .click();
   await expect(page.locator('.dataset-detail')).toBeVisible();
 });

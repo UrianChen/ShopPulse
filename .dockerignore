@@ -27,7 +27,11 @@ scripts
 backend/tests
 frontend/e2e
 frontend/src/**/*.test.ts
+frontend/src/**/*.test.tsx
+frontend/src/test
 frontend/playwright.config.ts
+frontend/playwright.visual.config.ts
+frontend/visual
 frontend/vitest.config.ts
 samples/thelook
 samples/expected_metrics.json

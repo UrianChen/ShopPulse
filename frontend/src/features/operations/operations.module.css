@@ -1,0 +1,121 @@
+.operations .table-scroll {
+  max-height: 390px;
+}
+.operations th {
+  position: sticky;
+  top: 0;
+}
+.operations th,
+.operations td {
+  font-size: 15px;
+  padding: var(--space-14);
+}
+.operations small {
+  color: var(--color-sage-47-2);
+  font-size: 14px;
+}
+.operations .mono {
+  font-size: 13px;
+}
+.ops-stats {
+  gap: var(--space-14);
+}
+.ops-stats > div {
+  background: var(--color-soft);
+}
+.ops-stats strong {
+  color: var(--color-green-36);
+  font-size: 30px;
+  font-variant-numeric: tabular-nums;
+}
+.ops-stats span,
+.ops-stats small {
+  color: var(--color-green-48);
+}
+.deletion-preview {
+  background: var(--color-sand-97-2);
+  color: var(--color-amber-39);
+  border-color: var(--color-sand-85);
+}
+.worker-details {
+  margin: var(--space-12) 0;
+}
+.operations > .panel {
+  margin: var(--space-22) 0;
+}
+.operations h2 {
+  font-size: 20px;
+  margin-bottom: var(--space-15);
+}
+.operations form {
+  margin-top: var(--space-20);
+}
+.operations pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+.operations .form-grid {
+  margin: var(--space-18) 0;
+}
+.operations small {
+  display: block;
+  font-size: 14px;
+}
+.mono {
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+.ops-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-18);
+  margin: var(--space-20) 0;
+}
+.ops-stats > div {
+  background: var(--color-soft);
+  padding: var(--space-18);
+  border-radius: var(--radius-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+.ops-stats span,
+.ops-stats small {
+  font-size: 14px;
+  color: var(--color-sage-45-3);
+}
+.ops-stats strong {
+  font-size: 26px;
+  overflow-wrap: anywhere;
+}
+.deletion-preview {
+  background: var(--color-sand-97);
+  border: 1px solid var(--color-amber-82);
+  padding: var(--space-22);
+  margin: var(--space-20) 0;
+  border-radius: var(--radius-10);
+}
+.deletion-preview h3 {
+  font-size: 18px;
+}
+.deletion-preview ul {
+  margin: var(--space-15);
+  padding-left: var(--space-20);
+}
+.operations th,
+.operations td {
+  padding: var(--space-12);
+  text-align: left;
+  border-bottom: 1px solid var(--color-sage-92);
+  overflow-wrap: anywhere;
+  max-width: 300px;
+  font-size: 14px;
+}
+.operations table {
+  width: 100%;
+  min-width: 620px;
+}
+.operations button {
+  cursor: pointer;
+}

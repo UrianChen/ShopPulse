@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getLanguage, LANGUAGE_KEY, locale, message, setLanguage, t } from './i18n';
 import { formatMetric } from '../features/dashboard/format';
 
-afterEach(() => { vi.unstubAllGlobals(); setLanguage('zh'); });
+afterEach(() => {
+  vi.unstubAllGlobals();
+  setLanguage('zh');
+});
 
 describe('interface language', () => {
   it('persists only language and updates the document language', () => {
@@ -18,7 +21,11 @@ describe('interface language', () => {
     expect(t('净销售额')).toBe('净销售额');
   });
   it('works when storage is blocked and preserves interpolated values', () => {
-    vi.stubGlobal('localStorage', { setItem: () => { throw new Error('blocked'); } });
+    vi.stubGlobal('localStorage', {
+      setItem: () => {
+        throw new Error('blocked');
+      },
+    });
     setLanguage('en');
     expect(locale()).toBe('en-US');
     expect(t('比较期 {0}', '2026-10-01')).toBe('Previous: 2026-10-01');
@@ -27,7 +34,12 @@ describe('interface language', () => {
     expect(message('无法完成未知请求')).toContain('Unable to complete');
   });
   it('localizes currency without losing decimal precision or changing values', () => {
-    const metric = { value: '900719925474099312345', unit: 'minor_currency' as const, quality: 'confirmed' as const, unavailable_reason: null };
+    const metric = {
+      value: '900719925474099312345',
+      unit: 'minor_currency' as const,
+      quality: 'confirmed' as const,
+      unavailable_reason: null,
+    };
     setLanguage('en');
     expect(formatMetric(metric, 'CNY', 2)).toBe('CN¥9,007,199,254,740,993,123.45');
     setLanguage('zh');

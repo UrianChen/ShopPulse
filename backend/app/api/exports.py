@@ -3,11 +3,12 @@ from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api import responses as out
 from app.api.dependencies import WorkspaceContext, current_workspace, envelope, mutation_workspace
 from app.api.imports import scoped
 from app.api.reports import idempotency
@@ -17,7 +18,7 @@ from app.db.session import db_session
 from app.ingestion.storage import object_path
 from app.ops.audit import audit
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", default_response_class=JSONResponse)
 
 
 class ExportInput(BaseModel):
@@ -43,7 +44,11 @@ def public(row):
     }
 
 
-@router.post("/reports/{report_id}/exports", status_code=202)
+@router.post(
+    "/reports/{report_id}/exports",
+    status_code=202,
+    response_model=out.Envelope[out.ExportArtifact],
+)
 def create(
     report_id: uuid.UUID,
     payload: ExportInput,
@@ -88,7 +93,7 @@ def create(
     return envelope(request, public(row))
 
 
-@router.get("/reports/{report_id}/exports")
+@router.get("/reports/{report_id}/exports", response_model=out.Envelope[list[out.ExportArtifact]])
 def listing(
     report_id: uuid.UUID,
     request: Request,

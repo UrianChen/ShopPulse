@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-ENGINE_VERSION = "2.0.0"
+ENGINE_VERSION = "2.1.0"
 DEFINITION_VERSION = "1.0"
 
 

@@ -1,0 +1,86 @@
+.automation {
+  display: grid;
+  gap: var(--space-28);
+}
+.automation-section {
+  display: grid;
+  gap: var(--space-14);
+}
+.automation-section h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+.automation-form {
+  display: grid;
+  gap: var(--space-12);
+}
+.automation-form fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--space-12);
+}
+.form-grid.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.schedule-list {
+  display: grid;
+  gap: var(--space-12);
+}
+.schedule-card {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-16);
+  align-items: flex-start;
+}
+.schedule-card h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+  margin: 0 0 var(--space-6);
+}
+.schedule-card p,
+.schedule-card small {
+  display: block;
+  margin: var(--space-2) 0;
+}
+.action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-12);
+  padding: var(--space-14) var(--space-18);
+  border-bottom: 1px solid var(--line, var(--color-line));
+}
+.action-row:last-child {
+  border-bottom: 0;
+}
+.action-row.status-dismissed .action-main p {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+.action-main p {
+  margin: var(--space-6) 0;
+}
+.action-controls {
+  display: flex;
+  gap: var(--space-8);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.action-controls .field {
+  min-width: 120px;
+}
+.field.compact {
+  min-width: 140px;
+}
+@media (max-width: 1100px) {
+  .form-grid.four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .action-row {
+    grid-template-columns: 1fr;
+  }
+}

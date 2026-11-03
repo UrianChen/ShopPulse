@@ -3,10 +3,12 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.api import responses as out
 from app.api.dependencies import WorkspaceContext, current_workspace, envelope, mutation_workspace
 from app.api.imports import scoped
 from app.core.errors import AppError
@@ -18,7 +20,7 @@ from app.providers.adapter import MESSAGES
 from app.providers.credentials import encrypt, lock_configs
 from app.providers.egress import ProviderError, normalize_url
 
-router = APIRouter(prefix="/api/v1/model-configs")
+router = APIRouter(prefix="/api/v1/model-configs", default_response_class=JSONResponse)
 
 
 class ModelInput(BaseModel):
@@ -26,8 +28,9 @@ class ModelInput(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     base_url: str = Field(min_length=1, max_length=500)
     model_name: str = Field(min_length=1, max_length=200)
+    review_model_name: str | None = Field(default=None, max_length=200)
     protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"] = "openai_chat"
-    timeout_seconds: int = Field(default=45, ge=5, le=300)
+    timeout_seconds: int = Field(default=120, ge=5, le=300)
     token_limit_parameter: Literal["none", "max_tokens", "max_completion_tokens"] = "none"
     product_name_mode: Literal["sku_only", "include_names"] = "sku_only"
     is_default: bool = False
@@ -59,6 +62,7 @@ def public(item, db):
         "name": item.name,
         "base_url": item.base_url,
         "model_name": item.model_name,
+        "review_model_name": item.review_model_name,
         "protocol": item.protocol,
         "revision": item.revision,
         "is_default": item.is_default,
@@ -85,6 +89,7 @@ class ModelPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     base_url: str | None = Field(default=None, min_length=1, max_length=500)
     model_name: str | None = Field(default=None, min_length=1, max_length=200)
+    review_model_name: str | None = Field(default=None, max_length=200)
     protocol: Literal["openai_chat", "openai_responses", "anthropic_messages"] | None = None
     timeout_seconds: int | None = Field(default=None, ge=5, le=300)
     token_limit_parameter: Literal["none", "max_tokens", "max_completion_tokens"] | None = None
@@ -162,6 +167,8 @@ def apply(item, payload, db, actor):
         "is_default",
     ):
         setattr(item, field, getattr(payload, field))
+    # Blank means no review model.
+    item.review_model_name = (payload.review_model_name or "").strip() or None
     item.base_url = url
     item.updated_at = now()
     item.consent = consent_for(item, url, payload.product_name_mode, actor)
@@ -172,7 +179,7 @@ def apply(item, payload, db, actor):
     item.capabilities = item.tested_at = item.test_job_id = None
 
 
-@router.get("")
+@router.get("", response_model=out.Envelope[list[out.ModelConfig]])
 def listing(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -186,7 +193,7 @@ def listing(
     return envelope(request, [public(item, db) for item in items])
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, response_model=out.Envelope[out.ModelConfig])
 def create(
     payload: ModelInput,
     request: Request,
@@ -208,7 +215,7 @@ def create(
     return envelope(request, public(item, db))
 
 
-@router.patch("/{config_id}")
+@router.patch("/{config_id}", response_model=out.Envelope[out.ModelConfig])
 def patch(
     config_id: uuid.UUID,
     payload: ModelPatch,
@@ -227,6 +234,7 @@ def patch(
             "name",
             "base_url",
             "model_name",
+            "review_model_name",
             "protocol",
             "timeout_seconds",
             "token_limit_parameter",
@@ -251,7 +259,7 @@ def patch(
     return envelope(request, public(item, db))
 
 
-@router.get("/{config_id}")
+@router.get("/{config_id}", response_model=out.Envelope[out.ModelConfig])
 def detail(
     config_id: uuid.UUID,
     request: Request,
@@ -283,7 +291,7 @@ def remove(
     db.commit()
 
 
-@router.post("/{config_id}/consent")
+@router.post("/{config_id}/consent", response_model=out.Envelope[out.ModelConfig])
 def confirm_consent(
     config_id: uuid.UUID,
     request: Request,
@@ -311,7 +319,7 @@ def confirm_consent(
     return envelope(request, public(item, db))
 
 
-@router.post("/{config_id}/test", status_code=202)
+@router.post("/{config_id}/test", status_code=202, response_model=out.Envelope[out.JobAccepted])
 def test(
     config_id: uuid.UUID,
     request: Request,

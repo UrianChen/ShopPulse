@@ -12,11 +12,46 @@ describe('authoritative decimal formatting', () => {
     expect(decimal('21474836469999999999785252', 2, -2)).toBe('214,748,364,699,999,999,997,852.52');
     expect(decimal('12500', 3, -3)).toBe('12.500');
     expect(decimal('12500', 0, 0)).toBe('12,500');
-    expect(formatMetric({ value: null, unit: 'minor_currency', quality: 'unavailable', unavailable_reason: 'COST_MISSING' }, 'CNY', 2)).toBe('—');
+    expect(
+      formatMetric(
+        {
+          value: null,
+          unit: 'minor_currency',
+          quality: 'unavailable',
+          unavailable_reason: 'COST_MISSING',
+        },
+        'CNY',
+        2,
+      ),
+    ).toBe('—');
   });
   it('distinguishes percentage points, zero baselines and incomplete data', () => {
-    expect(changeText({ delta: '0.018181818182', delta_pp: '1.818181818182', change_rate: null, state: 'comparable', quality: 'confirmed' })).toBe('+1.82 个百分点');
-    expect(changeText({ delta: '100', delta_pp: null, change_rate: null, state: 'new', quality: 'confirmed' })).toContain('上期为零');
-    expect(changeText({ delta: null, delta_pp: null, change_rate: null, state: 'incomplete_coverage', quality: 'unavailable' })).toContain('不作周期比较');
+    expect(
+      changeText({
+        delta: '0.018181818182',
+        delta_pp: '1.818181818182',
+        change_rate: null,
+        state: 'comparable',
+        quality: 'confirmed',
+      }),
+    ).toBe('+1.82 个百分点');
+    expect(
+      changeText({
+        delta: '100',
+        delta_pp: null,
+        change_rate: null,
+        state: 'new',
+        quality: 'confirmed',
+      }),
+    ).toContain('上期为零');
+    expect(
+      changeText({
+        delta: null,
+        delta_pp: null,
+        change_rate: null,
+        state: 'incomplete_coverage',
+        quality: 'unavailable',
+      }),
+    ).toContain('不作周期比较');
   });
 });

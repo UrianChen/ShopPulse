@@ -19,6 +19,7 @@ jobs:
       - run: uv sync --frozen
         working-directory: backend
       - run: backend/.venv/bin/python scripts/check_versions.py
+      - run: backend/.venv/bin/python scripts/export_openapi.py --check
       - run: python scripts/test_release.py && python scripts/check_secrets.py
       - run: uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file ../.cache-audit-requirements.txt
         working-directory: backend
@@ -45,8 +46,23 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
         working-directory: frontend
-      - run: npm test && npm run build && npm audit --audit-level=high
+      - run: npm run format:check && npm run lint && npm run check:i18n -- --strict
         working-directory: frontend
+      - name: Generated API types match openapi.json
+        run: npm run api:types && git diff --exit-code -- src/lib/schema.ts
+        working-directory: frontend
+      - run: npm test && npm run build && npm run check:bundle && npm audit --audit-level=high
+        working-directory: frontend
+      # Screenshots and axe checks of every page against API fixtures (no backend), in the same
+      # Playwright Linux container that made the baselines.
+      - name: Visual regression and accessibility
+        run: npm run test:visual:linux
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: visual-test-results
+          path: frontend/test-results
   compose-e2e:
     runs-on: ubuntu-latest
     steps:

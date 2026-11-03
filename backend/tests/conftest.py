@@ -15,6 +15,8 @@ from app.db.models import Base, Job, Workspace
 from app.jobs import queue
 from app.main import app
 
+pytest_plugins = ["tests.response_guard"]
+
 
 @pytest.fixture(scope="session")
 def database():

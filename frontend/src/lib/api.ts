@@ -12,11 +12,14 @@ export class ApiError extends Error {
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
-  if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
+  if (options.body && !(options.body instanceof FormData))
+    headers.set('Content-Type', 'application/json');
   let response: Response;
   try {
     response = await fetch(`/api/v1${path}`, {
-      ...options, headers, credentials: 'omit',
+      ...options,
+      headers,
+      credentials: 'omit',
       signal: options.signal ?? AbortSignal.timeout(15000),
     });
   } catch {
@@ -37,5 +40,3 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   }
   return body.data as T;
 }
-
-export type Workspace = { id: string; name: string; timezone: string; currency: string };

@@ -1,16 +1,22 @@
-"""Evidence-bound sentence grammar (v2).
+"""Evidence-bound sentence grammar (v3).
 
 The model writes sentence templates with ``{{name}}`` placeholders. Every placeholder is bound to
 an evidence record and a whitelisted path inside that record's payload; the server resolves the
 path, checks that the requested format matches the value's type and renders the final text.
 Numbers, SKUs, dates and labels therefore never come from model prose.
+
+v3 adds computed bindings (``derive``: diff, ratio, multiple or share of two bound values, checked
+by unit rules in ``derive.py``), the ``multiple`` format, labels for hypothesis states and trend
+directions, and a small-sample rule: a SKU-level change measured on few orders cannot carry an
+observation on its own.
 """
 
+import difflib
 import re
 from decimal import Decimal, InvalidOperation, localcontext
 
 PLACEHOLDER = re.compile(r"\{\{([a-z][a-z0-9_]{0,19})\}\}")
-FORMATS = ("money", "count", "percent", "pp", "entity", "date", "label", "note")
+FORMATS = ("money", "count", "percent", "pp", "multiple", "entity", "date", "label", "note")
 UNITS = {
     "gross_sales": "minor_currency",
     "refund_amount": "minor_currency",
@@ -123,6 +129,18 @@ LABELS = {
             "insufficient_data": "insufficient data",
         },
     },
+    "hypothesis_state": {
+        "zh": {"supported": "数据支持", "refuted": "已排除", "inconclusive": "无法判断"},
+        "en": {
+            "supported": "supported by data",
+            "refuted": "ruled out",
+            "inconclusive": "inconclusive",
+        },
+    },
+    "direction": {
+        "zh": {"up": "上升", "down": "下降", "flat": "持平"},
+        "en": {"up": "rising", "down": "falling", "flat": "flat"},
+    },
     "note_kind": {
         "zh": {
             "promotion": "促销",
@@ -200,7 +218,37 @@ RULES = {
         (rf"items\.{N}\.product_name", "name"),
         (rf"items\.{N}\.start", "date"),
         (rf"items\.{N}\.metrics\.{M}", "metric"),
+        (rf"items\.{N}\.previous\.metrics\.{M}", "metric"),
+        *[(rf"items\.{N}\." + pattern, kind) for pattern, kind in COMPARISON],
         (rf"total\.metrics\.{M}", "metric"),
+        (rf"total\.previous\.metrics\.{M}", "metric"),
+        *[(r"total\." + pattern, kind) for pattern, kind in COMPARISON],
+    ],
+    "decompose_metric_change": [
+        (r"metric", "label:metric"),
+        (r"(delta_pp|mix_effect_pp|rate_effect_pp|other_pp)", "pp"),
+        (r"(delta_minor|price_effect_minor|basket_effect_minor)", "signed_money"),
+        (rf"items\.{N}\.sku", "sku"),
+        (rf"items\.{N}\.product_name", "name"),
+        (rf"items\.{N}\.(mix_effect_pp|rate_effect_pp|total_effect_pp)", "pp"),
+        (rf"items\.{N}\.(current_share|previous_share|current_rate|previous_rate)", "ratio"),
+    ],
+    "get_history": [
+        (rf"windows\.{N}\.(start|end_exclusive)", "date"),
+        (rf"windows\.{N}\.metrics\.{M}", "metric"),
+        (rf"streaks\.{M}\.periods", "count"),
+        (rf"streaks\.{M}\.direction", "label:direction"),
+        (r"window_days", "count"),
+    ],
+    "derive": [(r"result", "derived")],
+    "test_hypothesis": [
+        (r"state", "label:hypothesis_state"),
+        (r"derived", "derived"),
+        (rf"operands\.{N}\.value", "derived"),
+    ],
+    "recheck_hypotheses": [
+        (rf"items\.{N}\.statement", "note"),
+        (rf"items\.{N}\.(state|previous_state)", "label:hypothesis_state"),
     ],
     "cost_coverage": [
         (r"summary\.(missing_cost_rows|missing_cost_skus|estimated_restock_rows)", "count"),
@@ -277,7 +325,18 @@ def walk(payload, path):
     return value
 
 
+DERIVED_FORMATS = {
+    "minor_currency": "money",
+    "count": "count",
+    "ratio": "percent",
+    "pp": "pp",
+    "multiple": "multiple",
+}
+
+
 def expected_format(kind, metric, leaf):
+    if kind == "derived":
+        return DERIVED_FORMATS.get(leaf.get("unit")) if isinstance(leaf, dict) else None
     if kind == "metric":
         if not isinstance(leaf, dict) or leaf.get("unit") not in {
             "minor_currency",
@@ -307,16 +366,16 @@ def decimal_text(value, places, signed):
     return "+" + text if signed and value > 0 else text
 
 
-def render_value(kind, leaf, fmt, ctx):
+def render_value(kind, leaf, fmt, ctx, estimated=False):
     language = ctx["language"]
     signed = kind in {"signed_ratio", "signed_money", "pp", "delta"}
-    estimated = False
-    if kind == "metric":
+    if kind in {"metric", "derived"}:
         if leaf.get("value") is None:
             raise ValueError("UNAVAILABLE_VALUE")
-        estimated = leaf.get("quality") == "estimated"
+        estimated = estimated or leaf.get("quality") == "estimated"
+        signed = signed or bool(leaf.get("signed"))
         leaf = leaf["value"]
-    if fmt in {"money", "count", "percent", "pp"}:
+    if fmt in {"money", "count", "percent", "pp", "multiple"}:
         try:
             with localcontext() as context:
                 context.prec = 70
@@ -333,6 +392,9 @@ def render_value(kind, leaf, fmt, ctx):
                 elif fmt == "pp":
                     number = decimal_text(amount, 2, signed)
                     text = number + (" 个百分点" if language == "zh" else " pp")
+                elif fmt == "multiple":
+                    number = decimal_text(amount, 2, False)
+                    text = number + (" 倍" if language == "zh" else "×")
                 else:
                     text = decimal_text(amount, 0, signed)
         except (InvalidOperation, ValueError, TypeError):
@@ -399,8 +461,50 @@ def free_text_issues(text, at, ctx, limit=300):
     return []
 
 
+def node_paths(value, prefix="", depth=0):
+    """Paths of every node (lists capped) for nearest-path repair hints."""
+    if depth > 8:
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            path = f"{prefix}.{key}" if prefix else key
+            yield path
+            yield from node_paths(item, path, depth + 1)
+    elif isinstance(value, list):
+        for index, item in enumerate(value[:10]):
+            path = f"{prefix}.{index}" if prefix else str(index)
+            yield path
+            yield from node_paths(item, path, depth + 1)
+
+
+def nearest_path(ev, path):
+    candidates = [p for p in node_paths(ev["payload"]) if rule_for(ev["tool"], p)]
+    best = difflib.get_close_matches(path, candidates, n=1, cutoff=0.5)
+    return best[0] if best else None
+
+
+def path_hint(ev, path, message):
+    best = nearest_path(ev, path)
+    return message + (f"; closest bindable path: {best}" if best else "")
+
+
+def computed(binding, ev, ctx):
+    """Resolve a ``derive`` binding. Returns (kind, leaf, (in_low_item, is_change), record)."""
+    from app.reports.derive import DeriveError, derived_record
+
+    spec = binding["derive"]
+    other = ctx["evidence"].get(spec["b"]["evidence_id"])
+    if other is None:
+        raise DeriveError("UNKNOWN_EVIDENCE")
+    record, a, b = derived_record(spec["op"], ev, binding["path"], other, spec["b"]["path"])
+    low = (a["low"] or b["low"], spec["op"] == "diff" or a["change"] or b["change"])
+    return "derived", record["payload"]["result"], low, record
+
+
 def check_sentence(sentence, at, ctx, require_binding):
     """Return (issues, rendered) for one sentence object (already schema-validated)."""
+    from app.reports.derive import CHANGE_KINDS, DeriveError, flagged, low_sample
+
     template = sentence["template"]
     bindings = sentence["bindings"]
     issues = []
@@ -413,7 +517,7 @@ def check_sentence(sentence, at, ctx, require_binding):
             issue(at, "PLACEHOLDER_MISMATCH", "each {{name}} appears once and matches a binding")
         )
     issues += free_text_issues(PLACEHOLDER.sub("", template), at + ".template", ctx)
-    values, refs = {}, []
+    values, refs, lows = {}, [], []
     for index, binding in enumerate(bindings):
         where = f"{at}.bindings[{index}]"
         ev = ctx["evidence"].get(binding["evidence_id"])
@@ -423,28 +527,65 @@ def check_sentence(sentence, at, ctx, require_binding):
         rule = rule_for(ev["tool"], binding["path"])
         if rule is None:
             issues.append(
-                issue(where, "PATH_NOT_ALLOWED", f"path is not bindable for tool {ev['tool']}")
+                issue(
+                    where,
+                    "PATH_NOT_ALLOWED",
+                    path_hint(ev, binding["path"], f"path is not bindable for tool {ev['tool']}"),
+                )
             )
             continue
         kind, metric = rule
         if kind == "name" and not ctx["include_names"]:
             issues.append(issue(where, "NAMES_NOT_AUTHORIZED", "bind the sku instead"))
             continue
-        try:
-            leaf = walk(ev["payload"], binding["path"])
-        except (KeyError, TypeError):
-            issues.append(issue(where, "PATH_NOT_FOUND"))
-            continue
+        record = None
+        if binding.get("derive"):
+            try:
+                kind, leaf, low, record = computed(binding, ev, ctx)
+            except DeriveError as error:
+                issues.append(issue(where, "DERIVE_" + error.code))
+                continue
+        else:
+            try:
+                leaf = walk(ev["payload"], binding["path"])
+            except (KeyError, TypeError):
+                issues.append(
+                    issue(where, "PATH_NOT_FOUND", path_hint(ev, binding["path"], "no such path"))
+                )
+                continue
+            low = (low_sample(ev["payload"], binding["path"]), kind in CHANGE_KINDS)
         fmt = expected_format(kind, metric, leaf)
         if fmt is None or fmt != binding["format"]:
             issues.append(issue(where, "WRONG_FORMAT", f"expected {fmt or 'nothing'}"))
             continue
+        estimated = record is None and flagged(
+            ev["payload"], binding["path"], "quality", {"estimated"}
+        )
         try:
-            values[binding["name"]] = render_value(kind, leaf, fmt, ctx)
+            values[binding["name"]] = render_value(kind, leaf, fmt, ctx, estimated)
         except ValueError as error:
             issues.append(issue(where, str(error)))
             continue
         refs.append(binding["evidence_id"])
+        if record is not None:
+            refs += [binding["derive"]["b"]["evidence_id"], record["evidence_id"]]
+            ctx.setdefault("derived", {})[record["evidence_id"]] = record
+        lows.append(low)
+    # A change measured on a small-sample SKU needs at least one binding from outside such items.
+    if (
+        not issues
+        and require_binding
+        and any(item and change for item, change in lows)
+        and all(item for item, _ in lows)
+    ):
+        issues.append(
+            issue(
+                at,
+                "LOW_SAMPLE_ONLY",
+                "a SKU-level change on few orders cannot carry this sentence alone; add a "
+                "store-level binding or move it to hypotheses",
+            )
+        )
     if issues:
         return issues, None
     text = PLACEHOLDER.sub(lambda match: values[match.group(1)], template)

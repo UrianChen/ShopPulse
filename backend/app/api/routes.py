@@ -1,9 +1,11 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.api import responses as out
 from app.api.dependencies import (
     WorkspaceContext,
     current_workspace,
@@ -14,7 +16,7 @@ from app.db import SCHEMA_REVISION
 from app.db.models import Job, Workspace
 from app.db.session import db_session
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", default_response_class=JSONResponse)
 
 
 @router.get("/health/live")
@@ -35,7 +37,7 @@ def ready(request: Request, db: Session = Depends(db_session)):
     return envelope(request, {"status": "ready", "schema_revision": SCHEMA_REVISION})
 
 
-@router.get("/workspace")
+@router.get("/workspace", response_model=out.Envelope[out.Workspace])
 def workspace(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -66,7 +68,7 @@ def job_data(job: Job):
     }
 
 
-@router.get("/jobs")
+@router.get("/jobs", response_model=out.Envelope[list[out.Job]])
 def jobs(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -81,7 +83,7 @@ def jobs(
     return envelope(request, [job_data(item) for item in items])
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/{job_id}", response_model=out.Envelope[out.Job])
 def job_detail(
     job_id: uuid.UUID,
     request: Request,

@@ -4,11 +4,12 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api import responses as out
 from app.api.dependencies import WorkspaceContext, current_workspace, envelope, mutation_workspace
 from app.core.config import ROOT, settings
 from app.core.errors import AppError
@@ -27,7 +28,7 @@ from app.ingestion.schema import ImportConfig, MappingRequest, ResolutionRequest
 from app.ingestion.service import schedule
 from app.ingestion.storage import object_path
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", default_response_class=JSONResponse)
 
 
 @router.get("/samples/{filename}")
@@ -76,7 +77,7 @@ def revision_guard(draft, expected):
         )
 
 
-@router.post("/uploads", status_code=202)
+@router.post("/uploads", status_code=202, response_model=out.Envelope[out.UploadAccepted])
 def upload_file(
     request: Request,
     file: UploadFile = File(),
@@ -140,7 +141,7 @@ def upload_file(
     return envelope(request, {"upload_id": str(item.id), "job_id": str(job.id)})
 
 
-@router.get("/uploads/{upload_id}")
+@router.get("/uploads/{upload_id}", response_model=out.Envelope[out.Upload])
 def get_upload(
     upload_id: uuid.UUID,
     request: Request,
@@ -172,7 +173,7 @@ class NewImport(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
-@router.post("/imports", status_code=201)
+@router.post("/imports", status_code=201, response_model=out.Envelope[out.ImportDraft])
 def new_import(
     payload: NewImport,
     request: Request,
@@ -204,7 +205,7 @@ def new_import(
     return envelope(request, draft_data(item))
 
 
-@router.get("/imports")
+@router.get("/imports", response_model=out.Envelope[list[out.ImportDraft]])
 def list_imports(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -219,7 +220,7 @@ def list_imports(
     return envelope(request, [draft_data(item) for item in rows])
 
 
-@router.get("/imports/{import_id}")
+@router.get("/imports/{import_id}", response_model=out.Envelope[out.ImportDraft])
 def get_import(
     import_id: uuid.UUID,
     request: Request,
@@ -229,7 +230,7 @@ def get_import(
     return envelope(request, draft_data(scoped(db, ImportDraft, import_id, actor)))
 
 
-@router.put("/imports/{import_id}/mapping")
+@router.put("/imports/{import_id}/mapping", response_model=out.Envelope[out.ImportDraft])
 def save_mapping(
     import_id: uuid.UUID,
     payload: MappingRequest,
@@ -252,7 +253,7 @@ def save_mapping(
     return envelope(request, draft_data(item))
 
 
-@router.put("/imports/{import_id}/resolutions")
+@router.put("/imports/{import_id}/resolutions", response_model=out.Envelope[out.ImportDraft])
 def resolve(
     import_id: uuid.UUID,
     payload: ResolutionRequest,
@@ -284,7 +285,11 @@ def resolve(
     return envelope(request, draft_data(item))
 
 
-@router.post("/imports/{import_id}/validate", status_code=202)
+@router.post(
+    "/imports/{import_id}/validate",
+    status_code=202,
+    response_model=out.Envelope[out.JobAccepted],
+)
 def validate_import(
     import_id: uuid.UUID,
     payload: RevisionRequest,
@@ -307,7 +312,10 @@ def validate_import(
     return envelope(request, {"job_id": str(job.id)})
 
 
-@router.get("/imports/{import_id}/issues")
+@router.get(
+    "/imports/{import_id}/issues",
+    response_model=out.Envelope[out.Page[out.ValidationIssue]],
+)
 def issues(
     import_id: uuid.UUID,
     request: Request,
@@ -345,7 +353,11 @@ def issues(
     )
 
 
-@router.post("/imports/{import_id}/publish", status_code=202)
+@router.post(
+    "/imports/{import_id}/publish",
+    status_code=202,
+    response_model=out.Envelope[out.JobAccepted],
+)
 def publish_import(
     import_id: uuid.UUID,
     payload: RevisionRequest,
@@ -389,7 +401,7 @@ def source_data(db, version):
     }
 
 
-@router.get("/cost-versions")
+@router.get("/cost-versions", response_model=out.Envelope[list[out.DatasetVersion]])
 def cost_versions(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -404,7 +416,7 @@ def cost_versions(
     return envelope(request, [version_data(v) for v in values])
 
 
-@router.get("/datasets")
+@router.get("/datasets", response_model=out.Envelope[list[out.DatasetVersion]])
 def datasets(
     request: Request,
     actor: WorkspaceContext = Depends(current_workspace),
@@ -419,7 +431,7 @@ def datasets(
     return envelope(request, [version_data(v) for v in values])
 
 
-@router.get("/cost-versions/{version_id}")
+@router.get("/cost-versions/{version_id}", response_model=out.Envelope[out.CostVersionDetail])
 def cost_version_detail(
     version_id: uuid.UUID,
     request: Request,
@@ -452,7 +464,7 @@ def cost_version_detail(
     )
 
 
-@router.get("/datasets/{version_id}")
+@router.get("/datasets/{version_id}", response_model=out.Envelope[out.DatasetDetail])
 def dataset(
     version_id: uuid.UUID,
     request: Request,

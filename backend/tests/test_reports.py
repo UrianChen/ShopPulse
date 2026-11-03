@@ -374,17 +374,19 @@ def test_http_ipc_workflow_and_evals(provider, protocol, model, strategy, mode):
     if model in {"bad-number", "foreign-evidence", "malformed-report", "repair-once"}:
         assert output["repaired"]
     if model == "full":
-        assert registry.evidence[-1]["tool"] == "rank_products"
+        # The plan's hypothesis test ran rank_products in the server, then recorded a verdict.
+        assert [e["tool"] for e in registry.evidence[-2:]] == ["rank_products", "test_hypothesis"]
     if model == "unsafe-tool":
-        codes = [s.get("code") for s in output["steps"] if s["phase"] == "tool"]
-        assert codes == ["TOOL_NOT_ALLOWED"]
+        codes = [s.get("code") for s in output["steps"] if s["phase"] == "test"]
+        assert codes == ["TEST_TOOL_NOT_ALLOWED"]
     if mode:
         # The parent re-validates the child's raw output against its own evidence.
         validate(request | {"evidence": registry.evidence}, output["raw_analysis"])
 
 
 def test_agent_drills_rejects_duplicates_and_stops_without_new_evidence():
-    request = bundle("agent")
+    # Questions use the tool loop; reports plan hypotheses instead (tests/test_agent_v3.py).
+    request = bundle("agent", kind="question")
     drilled = []
 
     def drill(sku):
@@ -398,7 +400,9 @@ def test_agent_drills_rejects_duplicates_and_stops_without_new_evidence():
             "trend": [],
         }
 
-    output = ReportWorkflow(request, mock_transport, drill=drill).run()
+    workflow = ReportWorkflow(request, mock_transport, drill=drill)
+    workflow.budgets = {**workflow.budgets, "tools": 8, "tool_rounds": 5, "requests": 8}
+    output = workflow.run()
     assert output["error_code"] is None, output
     tools = [(s["tool"], s["code"]) for s in output["steps"] if s["phase"] == "tool"]
     assert tools == [
@@ -411,9 +415,8 @@ def test_agent_drills_rejects_duplicates_and_stops_without_new_evidence():
     assert any(
         s["phase"] == "finalize" and s["reason"] == "no_new_evidence" for s in output["steps"]
     )
-    texts = [s["text"] for f in output["analysis"]["findings"] for s in f["supporting"]]
-    assert texts == ["商品 A 的累计退款为 CNY 100.00。"]
-    assert output["analysis"]["recommendations"][0]["action"] == "核对 A 的退款原因并复查成本记录"
+    texts = [s["text"] for s in output["analysis"]["answer"]]
+    assert texts[-1] == "商品 A 的累计退款为 CNY 100.00。"
 
 
 def test_targeted_repair_lists_problem_locations():
@@ -437,7 +440,7 @@ def test_compaction_for_openai_and_append_only_history_for_anthropic(monkeypatch
 
     monkeypatch.setattr(workflow, "COMPACT_AFTER_BYTES", 1000)
     for protocol in ("openai_chat", "anthropic_messages"):
-        request = bundle("agent", protocol=protocol)
+        request = bundle("agent", protocol=protocol, kind="question")
         sent = []
 
         def transport(url, key, payload, timeout, protocol=protocol, sent=sent):
@@ -567,7 +570,7 @@ def test_structured_output_mode_and_combination_fallback():
         ({"native_json": True}, "json_object"),
     ):
         for reject_combination in (False, True):
-            request = bundle()
+            request = bundle(kind="question")
             request["config"]["capabilities"] = {"strategy": "native_tools", **caps}
             calls = []
 
@@ -682,7 +685,9 @@ def test_report_api_golden_idempotency_revision_followup_and_actions(
     assert report["content"]["generation_mode"] == "deterministic"
     assert report["content"]["metrics"]["current"]["metrics"]["net_sales"]["value"] == "55000"
     assert report["content"]["metrics"]["current"]["metrics"]["gross_profit"]["value"] == "23000"
-    assert len(report["content"]["evidence_index"]) == 7
+    # Seven core tools plus the frozen history window (one earlier week is covered).
+    assert len(report["content"]["evidence_index"]) == 8
+    assert report["content"]["history"]["windows"][0]["coverage_complete"]
     ev = report["content"]["evidence_index"][0]["evidence_id"]
     path = f"/api/v1/reports/{item['id']}"
     assert api_client.get(path + "/evidence/" + ev).status_code == 200
@@ -793,7 +798,10 @@ def test_model_report_multi_step_and_conversation(
     assert actions[0]["text"] == "核对 A 的退款原因并复查成本记录"
     runs = api_client.get(f"/api/v1/reports/{item['id']}/runs").json()["data"]
     phases = [s["phase"] for s in runs[0]["steps"]]
-    assert phases.count("tool") == 4 and "finalize" in phases and phases[-1] == "completed"
+    # Plan two hypotheses, refine with one SKU drill-down, then write: tests, not tool calls.
+    assert phases.count("test") == 3 and phases.count("hypotheses") == 2
+    assert phases.count("tool") == 0 and phases[-1] == "completed"
+    assert runs[0]["usage"]["requests"] == 3
     stream = api_client.get(f"/api/v1/reports/{item['id']}/runs/{runs[0]['id']}/events")
     assert stream.status_code == 200 and "event: done" in stream.text
     assert stream.text.count("event: step") == len(runs[0]["steps"])
@@ -891,7 +899,7 @@ def test_stale_report_commit_and_worker_recovery(api_client, db, isolated_storag
     report = db.get(Report, uuid.UUID(item["id"]))
     assert report.status in {"ready", "ready_with_warnings"}
     assert len(list(db.scalars(select(AgentRun).where(AgentRun.report_id == report.id)))) == 2
-    assert len(list(db.scalars(select(ToolResult).where(ToolResult.report_id == report.id)))) == 7
+    assert len(list(db.scalars(select(ToolResult).where(ToolResult.report_id == report.id)))) == 8
     assert len(list(db.scalars(select(ActionItem).where(ActionItem.report_id == report.id)))) == 1
 
 
@@ -937,7 +945,7 @@ def test_report_lease_exhaustion_preserves_saved_core(
     report = api_client.get(f"/api/v1/reports/{item['id']}").json()["data"]
     assert report["status"] == "ready_with_warnings"
     assert report["content"]["model_error_code"] == "LEASE_RETRIES_EXHAUSTED"
-    assert len(report["content"]["evidence_index"]) == 7
+    assert len(report["content"]["evidence_index"]) == 8
 
 
 def test_validator_reports_every_problem_location():

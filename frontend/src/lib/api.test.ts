@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError } from './api';
 
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('API transport', () => {
   it('sends direct requests and unwraps responses', async () => {
@@ -13,12 +15,22 @@ describe('API transport', () => {
     expect(options.credentials).toBe('omit');
   });
   it('exposes a safe error with a traceable request ID', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      error: { code: 'INVALID_QUERY', message: '查询参数无效。' },
-      meta: { request_id: 'trace-id' },
-    }), { status: 422 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { code: 'INVALID_QUERY', message: '查询参数无效。' },
+            meta: { request_id: 'trace-id' },
+          }),
+          { status: 422 },
+        ),
+      ),
+    );
     await expect(api('/metrics')).rejects.toMatchObject({
-      status: 422, code: 'INVALID_QUERY', requestId: 'trace-id',
+      status: 422,
+      code: 'INVALID_QUERY',
+      requestId: 'trace-id',
     });
   });
   it('handles network failures and empty delete responses', async () => {

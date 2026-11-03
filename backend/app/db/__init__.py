@@ -1,1 +1,1 @@
-SCHEMA_REVISION = "0002_agent_v2"
+SCHEMA_REVISION = "0003_agent_v3"

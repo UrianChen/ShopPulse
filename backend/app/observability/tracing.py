@@ -13,6 +13,8 @@ import uuid
 from opentelemetry import trace
 from opentelemetry.propagate import extract, inject
 
+from app import __version__
+
 _provider = None
 
 
@@ -56,7 +58,7 @@ def _clean(attributes):
 @contextlib.contextmanager
 def span(name, attributes=None, traceparent=None):
     context = extract({"traceparent": traceparent}) if traceparent else None
-    tracer = trace.get_tracer("shoppulse.agent", "2.0.0")
+    tracer = trace.get_tracer("shoppulse.agent", __version__)
     with tracer.start_as_current_span(name, context=context, attributes=_clean(attributes)) as item:
         yield item
 

@@ -1,7 +1,7 @@
 {
   "name": "shoppulse-frontend",
   "private": true,
-  "version": "2.0.0",
+  "version": "3.0.0",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -11,8 +11,16 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:visual": "vite build && playwright test -c playwright.visual.config.ts",
+    "test:visual:linux": "node scripts/visual-linux.mjs",
+    "api:types": "openapi-typescript openapi.json -o src/lib/schema.ts --default-non-nullable false",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
@@ -23,12 +31,28 @@
     "react-router-dom": "^7.9.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@eslint/js": "^9.39.5",
     "@playwright/test": "^1.56.0",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "axe-core": "^4.14.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.5.0",
+    "jsdom": "^26.1.0",
+    "msw": "^2.15.0",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.9.10",
     "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.1",
     "vite": "^7.1.0",
     "vitest": "^5.0.3"
   }

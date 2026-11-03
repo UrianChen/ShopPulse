@@ -1,4 +1,25 @@
-"""Deterministic synthetic order data with injected, labelled business changes."""
+"""Deterministic synthetic order data with injected, labelled business changes.
+
+Mutations (``current`` means the report period, the last ``period_days`` days):
+
+- ``refund_spike`` {sku, rate}: share of the SKU's current orders fully refunded.
+- ``sales_drop`` / ``sales_surge`` {sku, factor}: current order volume of one SKU.
+- ``concentration`` {skus, factor}: current order volume of several SKUs.
+- ``daily_outlier`` {date, factor}: order volume of every SKU on one day.
+- ``negative_margin`` {sku, ratio}: cost ratio of a SKU in every period.
+- ``missing_cost`` {sku}: the SKU has no cost records.
+- ``price`` {factor, sku?}: current unit price of one SKU or of all SKUs (order count unchanged).
+- ``basket`` {min, max}: units per order line in the current period.
+- ``cost_ratio`` {sku, ratio}: cost ratio of a SKU in every period (product-mix setups).
+- ``cost_increase`` {sku, ratio}: cost ratio of a SKU in the current period only.
+- ``weight`` {sku, value}: base daily order rate of a SKU (small-sample setups).
+- ``scale`` {factor}: base daily order rate of every SKU (larger samples for trend setups).
+- ``trend`` {weekly}: order volume of every SKU multiplied by ``weekly`` per elapsed week.
+- ``name`` {sku, text}: product name override (prompt-injection setups).
+
+Mutations that do not apply never consume random numbers, so adding a mutation type keeps the
+data of every existing case byte-identical.
+"""
 
 import random
 from datetime import date, datetime, timedelta
@@ -27,6 +48,12 @@ def snapshot(start, end):
     return {"config": config, "resolutions": {}}
 
 
+def _of(mutations, kind, sku=None):
+    return next(
+        (m for m in mutations if m["type"] == kind and (sku is None or m.get("sku") == sku)), None
+    )
+
+
 def generate(spec):
     """Return {"rows", "snapshot", "query"} for an evaluation case spec."""
     rnd = random.Random(spec.get("seed", 1))
@@ -41,9 +68,18 @@ def generate(spec):
     cost_ratio = {s: rnd.uniform(0.35, 0.6) for s in skus}
     weight = {s: rnd.uniform(0.6, 3.0) for s in skus}
     mutations = spec.get("mutations", [])
+    names = {s: "示例商品 " + s[-2:] for s in skus}
     for m in mutations:
-        if m["type"] == "negative_margin":
+        if m["type"] in {"negative_margin", "cost_ratio"}:
             cost_ratio[m["sku"]] = m.get("ratio", 1.3)
+        if m["type"] == "weight":
+            weight[m["sku"]] = m["value"]
+        if m["type"] == "scale":
+            weight = {s: w * m["factor"] for s, w in weight.items()}
+        if m["type"] == "name":
+            names[m["sku"]] = m["text"]
+    trend = _of(mutations, "trend")
+    basket = _of(mutations, "basket")
     zone = ZoneInfo(TIMEZONE)
     rows, order_number = [], 0
     for offset in range(days):
@@ -51,6 +87,8 @@ def generate(spec):
         current = day >= current_start
         for sku in skus:
             count = weight[sku] * rnd.uniform(0.7, 1.3)
+            if trend:
+                count *= trend["weekly"] ** (offset // 7)
             for m in mutations if current else []:
                 if m["type"] == "sales_drop" and m["sku"] == sku:
                     count *= m.get("factor", 0.3)
@@ -60,10 +98,25 @@ def generate(spec):
                     count *= m.get("factor", 8)
                 if m["type"] == "daily_outlier" and m["date"] == day.isoformat():
                     count *= m.get("factor", 6)
+            unit_price = price[sku]
+            ratio = cost_ratio[sku]
+            if current:
+                change = next(
+                    (m for m in mutations if m["type"] == "price" and m.get("sku") in (None, sku)),
+                    None,
+                )
+                if change:
+                    unit_price = int(Decimal(unit_price) * Decimal(str(change["factor"])))
+                increase = _of(mutations, "cost_increase", sku)
+                if increase:
+                    ratio = increase["ratio"]
             for _ in range(int(count + rnd.random())):
                 order_number += 1
-                quantity = rnd.randint(1, 3)
-                paid = quantity * price[sku]
+                if current and basket:
+                    quantity = rnd.randint(basket["min"], basket["max"])
+                else:
+                    quantity = rnd.randint(1, 3)
+                paid = quantity * unit_price
                 refund, restocked = 0, 0
                 spike = next(
                     (
@@ -80,7 +133,7 @@ def generate(spec):
                     None
                     if missing
                     else str(
-                        (Decimal(price[sku]) * Decimal(str(cost_ratio[sku])) / 100).quantize(
+                        (Decimal(unit_price) * Decimal(str(ratio)) / 100).quantize(
                             Decimal("0.01"), rounding=ROUND_HALF_UP
                         )
                     )
@@ -97,7 +150,7 @@ def generate(spec):
                     {
                         "order_id": f"E{order_number:06d}",
                         "sku": sku,
-                        "product_name": "示例商品 " + sku[-2:],
+                        "product_name": names[sku],
                         "paid_at": paid_at.isoformat(),
                         "quantity": quantity,
                         "line_paid_minor": paid,

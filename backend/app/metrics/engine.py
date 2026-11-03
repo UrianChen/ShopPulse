@@ -204,6 +204,175 @@ def comparison(current, previous):
     return results
 
 
+def orders_of(product):
+    """Per-SKU order counts so report tools can flag small samples."""
+    previous = product["previous"]
+    return {
+        "orders_current": product["current"]["metrics"]["paid_orders"]["value"],
+        "orders_previous": previous["metrics"]["paid_orders"]["value"] if previous else None,
+    }
+
+
+def _unavailable(metric, reason):
+    return {"metric": metric, "available": False, "reason": reason, "items": []}
+
+
+def shift_share(products, current, previous, metric, numerator, denominator):
+    """Split a ratio change into product-mix and per-product rate effects (percentage points).
+
+    R = sum(w_i * r_i) with w_i the product share of the denominator and r_i its own ratio, so
+    R1 - R0 = sum((w1 - w0) * r0) + sum(w1 * (r1 - r0)) exactly. A product missing from one period
+    uses its other-period ratio as reference. Products whose denominator is zero while the
+    numerator is not (for example fully refunded lines with cost) cannot be weighted; their effect
+    is reported as ``other_pp`` so the three parts always add up to the total change.
+    """
+    if previous is None:
+        return _unavailable(metric, "NO_COMPARISON")
+    if not current["coverage_complete"] or not previous["coverage_complete"]:
+        return _unavailable(metric, "INCOMPLETE_COVERAGE")
+    totals = []
+    for period in (current, previous):
+        n, d = (period["metrics"][k]["value"] for k in (numerator, denominator))
+        if n is None or d is None or period["metrics"][metric]["value"] is None:
+            return _unavailable(metric, "UNAVAILABLE_VALUE")
+        if d <= 0:
+            return _unavailable(metric, "NON_POSITIVE_BASE")
+        totals.append(Decimal(d))
+    d1_total, d0_total = totals
+    estimated = any(
+        p["metrics"][k]["quality"] == "estimated"
+        for p in (current, previous)
+        for k in (metric, numerator, denominator)
+    )
+    items, mix_total, rate_total = [], Decimal(0), Decimal(0)
+    for p in products:
+        values = []
+        for period in (p["current"], p["previous"]):
+            if period is None:
+                values += [0, 0]
+                continue
+            n, d = period["metrics"][numerator]["value"], period["metrics"][denominator]["value"]
+            if n is None or d is None:
+                return _unavailable(metric, "UNAVAILABLE_VALUE")
+            if d < 0:
+                return _unavailable(metric, "NEGATIVE_VALUES")
+            values += [n, d]
+        n1, d1, n0, d0 = values
+        r1 = Decimal(n1) / d1 if d1 > 0 else None
+        r0 = Decimal(n0) / d0 if d0 > 0 else None
+        if r1 is None and r0 is None:
+            continue
+        reference0 = r1 if r0 is None else r0
+        reference1 = reference0 if r1 is None else r1
+        w1, w0 = Decimal(d1) / d1_total, Decimal(d0) / d0_total
+        mix = (w1 - w0) * reference0 * 100
+        rate = w1 * (reference1 - reference0) * 100
+        mix_total += mix
+        rate_total += rate
+        items.append(
+            {
+                "sku": p["sku"],
+                "product_name": p["product_name"],
+                "mix_effect_pp": mix,
+                "rate_effect_pp": rate,
+                "total_effect_pp": mix + rate,
+                "current_share": w1,
+                "previous_share": w0,
+                "current_rate": r1,
+                "previous_rate": r0,
+                **orders_of(p),
+            }
+        )
+    delta = (current["metrics"][metric]["value"] - previous["metrics"][metric]["value"]) * 100
+    items.sort(key=lambda item: (-abs(item["total_effect_pp"]), item["sku"] or ""))
+    return {
+        "metric": metric,
+        "available": True,
+        "reason": None,
+        "quality": "estimated" if estimated else "confirmed",
+        "delta_pp": delta,
+        "mix_effect_pp": mix_total,
+        "rate_effect_pp": rate_total,
+        "other_pp": delta - mix_total - rate_total,
+        "items": items[:10],
+    }
+
+
+def aov_factors(current, previous):
+    """AOV = price per unit x units per order; change = price effect + basket effect (exact)."""
+    if previous is None:
+        return _unavailable("aov", "NO_COMPARISON")
+    if not current["coverage_complete"] or not previous["coverage_complete"]:
+        return _unavailable("aov", "INCOMPLETE_COVERAGE")
+    factors, qualities = [], set()
+    for period in (current, previous):
+        m = period["metrics"]
+        net, units, orders = (m[k]["value"] for k in ("net_sales", "paid_units", "paid_orders"))
+        if net is None or m["aov"]["value"] is None:
+            return _unavailable("aov", "UNAVAILABLE_VALUE")
+        if not units or not orders:
+            return _unavailable("aov", "NON_POSITIVE_BASE")
+        factors.append((Decimal(net) / units, Decimal(units) / orders))
+        qualities.add(m["aov"]["quality"])
+    (p1, u1), (p0, u0) = factors
+    return {
+        "metric": "aov",
+        "available": True,
+        "reason": None,
+        "quality": "estimated" if "estimated" in qualities else "confirmed",
+        "delta_minor": p1 * u1 - p0 * u0,
+        "price_effect_minor": (p1 - p0) * u0,
+        "basket_effect_minor": p1 * (u1 - u0),
+        "units_per_order": {"current": u1, "previous": u0},
+        "items": [],
+    }
+
+
+HISTORY_KEYS = (
+    "net_sales",
+    "paid_orders",
+    "paid_units",
+    "aov",
+    "gross_profit",
+    "gross_margin",
+    "refund_amount",
+    "refund_amount_rate",
+)
+
+
+def history(rows, snapshot, windows):
+    with localcontext() as context:
+        context.prec = 70
+        return wire(_history(rows, snapshot, windows))
+
+
+def _history(rows, snapshot, windows):
+    """Store-level aggregates for consecutive earlier windows, frozen into the report context."""
+    options = snapshot["config"]["options"]
+    zone = options["timezone"]
+    coverage_start = timestamp(options["coverage_start"], zone)
+    coverage_end = timestamp(options["coverage_end_exclusive"], zone)
+    records = []
+    for original in rows:
+        r = dict(original)
+        r["paid_at"] = timestamp(str(r["paid_at"]), zone)
+        records.append(r)
+    result = []
+    for start, end in windows:
+        a, b = timestamp(start, zone), timestamp(end, zone)
+        complete = bool(options["coverage_confirmed"] and coverage_start <= a and b <= coverage_end)
+        data = aggregate([r for r in records if a <= r["paid_at"] < b], options, complete)
+        result.append(
+            {
+                "start": start,
+                "end_exclusive": end,
+                "coverage_complete": complete,
+                "metrics": {k: data["metrics"][k] for k in HISTORY_KEYS},
+            }
+        )
+    return {"windows": result}
+
+
 def calculate(rows, snapshot, query):
     with localcontext() as context:
         context.prec = 70
@@ -321,7 +490,10 @@ def _calculate(rows, snapshot, query):
     contributions.sort(key=lambda p: (p["sales_contribution_minor"], p["group_key"]))
 
     def contribution_item(p):
-        return {k: p[k] for k in ("sku", "product_name", "sales_contribution_minor")}
+        return {
+            **{k: p[k] for k in ("sku", "product_name", "sales_contribution_minor")},
+            **orders_of(p),
+        }
 
     effects = None
     if contribution_valid and previous["metrics"]["paid_orders"]["value"] > 0:
@@ -368,6 +540,20 @@ def _calculate(rows, snapshot, query):
                 if contribution_valid
                 else [],
                 "effects": effects,
+            },
+            "decompositions": {
+                "gross_margin": shift_share(
+                    products, current, previous, "gross_margin", "gross_profit", "net_sales"
+                ),
+                "refund_amount_rate": shift_share(
+                    products,
+                    current,
+                    previous,
+                    "refund_amount_rate",
+                    "refund_amount",
+                    "gross_sales",
+                ),
+                "aov": aov_factors(current, previous),
             },
             "excluded_rows": len(snapshot.get("resolutions", {}).get("excluded_rows", [])),
             "warnings": [

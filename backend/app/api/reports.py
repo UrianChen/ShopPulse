@@ -3,10 +3,11 @@ import time
 import uuid
 
 from fastapi import APIRouter, Depends, Header, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api import responses as out
 from app.api.dependencies import WorkspaceContext, current_workspace, envelope, mutation_workspace
 from app.api.imports import scoped
 from app.core.errors import AppError
@@ -27,7 +28,7 @@ from app.providers.credentials import lock_configs
 from app.reports import creation
 from app.reports.schema import QuestionInput, ReportInput
 
-router = APIRouter(prefix="/api/v1/reports")
+router = APIRouter(prefix="/api/v1/reports", default_response_class=JSONResponse)
 
 
 def idempotency(db, actor, route, key, payload):
@@ -60,7 +61,7 @@ def public(db, report, detail=False):
     return data
 
 
-@router.post("", status_code=202)
+@router.post("", status_code=202, response_model=out.Envelope[out.Report])
 def create(
     payload: ReportInput,
     request: Request,
@@ -99,7 +100,7 @@ def create(
     return envelope(request, public(db, report))
 
 
-@router.get("")
+@router.get("", response_model=out.Envelope[out.Page[out.Report]])
 def listing(
     request: Request,
     offset: int = 0,
@@ -125,7 +126,7 @@ def listing(
     )
 
 
-@router.get("/{report_id}")
+@router.get("/{report_id}", response_model=out.Envelope[out.ReportDetail])
 def detail(
     report_id: uuid.UUID,
     request: Request,
@@ -135,7 +136,7 @@ def detail(
     return envelope(request, public(db, scoped(db, Report, report_id, actor), True))
 
 
-@router.get("/{report_id}/runs")
+@router.get("/{report_id}/runs", response_model=out.Envelope[list[out.AgentRun]])
 def runs(
     report_id: uuid.UUID,
     request: Request,
@@ -190,7 +191,7 @@ def action_data(item):
     }
 
 
-@router.get("/{report_id}/actions")
+@router.get("/{report_id}/actions", response_model=out.Envelope[list[out.ActionItem]])
 def actions(
     report_id: uuid.UUID,
     request: Request,
@@ -249,7 +250,7 @@ def events(
     )
 
 
-@router.get("/{report_id}/evidence/{evidence_id}")
+@router.get("/{report_id}/evidence/{evidence_id}", response_model=out.Envelope[out.Json])
 def evidence(
     report_id: uuid.UUID,
     evidence_id: uuid.UUID,
@@ -266,7 +267,11 @@ def evidence(
     return envelope(request, value.payload)
 
 
-@router.post("/{report_id}/messages", status_code=202)
+@router.post(
+    "/{report_id}/messages",
+    status_code=202,
+    response_model=out.Envelope[out.MessageAccepted],
+)
 def ask(
     report_id: uuid.UUID,
     payload: QuestionInput,
@@ -319,7 +324,7 @@ def ask(
     return envelope(request, {"message_id": str(mid), "job_id": str(job.id)})
 
 
-@router.get("/{report_id}/messages")
+@router.get("/{report_id}/messages", response_model=out.Envelope[out.Page[out.ReportMessage]])
 def messages(
     report_id: uuid.UUID,
     request: Request,
