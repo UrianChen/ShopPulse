@@ -21,7 +21,7 @@ export function VersionList({ title, versions, pending, onOpen }: Props) {
       <div className={ui.panelTitle}>
         <h2>{title}</h2>
         <span className={css.outlineBadge}>
-          {versions.length} {t('个版本')}
+          {versions.length === 1 ? t('1 个版本') : t('{0} 个版本', versions.length)}
         </span>
       </div>
       {versions.map(v => (

@@ -17,8 +17,9 @@ from app.providers.protocols import build, parse
 from app.reports import patches, service
 from app.reports.derive import DeriveError, compute, flagged, operand
 from app.reports.evidence import lint, validate_analysis
-from app.reports.grammar import EvidenceError
+from app.reports.grammar import EvidenceError, free_text_issues
 from app.reports.hypothesis import seed
+from app.reports.prompts import load
 from app.reports.schema import PROMPT_VERSION, QUESTION_BUDGETS
 from app.reports.tools import ToolError, ToolRegistry, history_payload, metric_facts
 from app.reports.workflow import ReportWorkflow
@@ -794,4 +795,17 @@ def test_a_confirmed_operand_of_an_estimated_verdict_is_not_marked_estimated():
     assert flagged(verdict, "state", "quality", {"estimated"})
     assert flagged(
         {"items": [{"sample": "low", "metrics": {}}]}, "items.0.metrics", "sample", {"low"}
+    )
+
+
+def test_rejected_free_text_names_the_word_and_the_prompt_states_the_limits():
+    # English follow-ups failed on "SKUs" and "one-off": both stay rejected, but the repair now
+    # says which word, and the prompt says so before the first draft.
+    ctx = {"entities": []}
+    for text, word in (("Both are low-sample SKUs", "SKU"), ("Small one-off cases", "one")):
+        assert f'found "{word}"' in free_text_issues(text, "t", ctx)[0]["hint"]
+    assert "found a digit" in free_text_issues("Up 12 points", "t", ctx)[0]["hint"]
+    common = load(PROMPT_VERSION, "common")
+    assert (
+        '"one-off"' in common and 'the word "SKU"' in common and "at most four bindings" in common
     )

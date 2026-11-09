@@ -82,7 +82,7 @@ def test_offline_run_has_no_judge_and_labels_need_an_llm_judge(tmp_path, capsys)
     out = tmp_path / "run.json"
     assert main(["run", "--only", "refund_spike,question_refunds", "--out", str(out)]) == 0
     run = json.loads(out.read_text(encoding="utf-8"))
-    assert run["aggregate"]["cases"] == 2 and run["prompt_version"] == "3.0"
+    assert run["aggregate"]["cases"] == 2 and run["prompt_version"] == "3.1"
     assert not any("judge" in c for c in run["cases"])
     assert not any(key.startswith("judge_") for key in run["aggregate"])
     labels = tmp_path / "labels.csv"

@@ -39,7 +39,7 @@ def budgets_for(kind):
     return QUESTION_BUDGETS if kind == "question" else BUDGETS
 
 
-PROMPT_VERSION = "3.0"
+PROMPT_VERSION = "3.1"
 RULE_VERSION = "1.0"
 GRAMMAR_VERSION = "3.0"
 TOOL_VERSION = "3.0"

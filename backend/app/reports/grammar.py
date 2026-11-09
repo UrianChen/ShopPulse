@@ -447,12 +447,16 @@ def free_text_issues(text, at, ctx, limit=300):
         return [issue(at, "EMPTY_TEXT")]
     if len(text) > limit:
         return [issue(at, "TEXT_TOO_LONG", f"max {limit} characters")]
-    if any(character.isnumeric() for character in text) or FORBIDDEN.search(text):
+    word = FORBIDDEN.search(text)
+    if word or any(character.isnumeric() for character in text):
+        # Names only what the rule matched, so a repair can act on it without echoing the reply.
+        found = f'"{word.group(0)}"' if word else "a digit"
         return [
             issue(
                 at,
                 "UNBOUND_NUMBER_OR_CLAIM",
-                "numbers, dates, percentages, URLs and certainty claims need bindings",
+                f"found {found}; numbers, dates, percentages, URLs, the word SKU and certainty "
+                "claims need bindings or other wording",
             )
         ]
     lowered = text.lower()

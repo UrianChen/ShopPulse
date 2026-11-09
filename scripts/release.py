@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOP_FILES = {
     "VERSION",
     "README.md",
+    "README.en.md",
     "LICENSE",
     ".gitignore",
     ".dockerignore",

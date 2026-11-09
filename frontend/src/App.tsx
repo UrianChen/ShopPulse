@@ -80,7 +80,12 @@ function Shell() {
         </Link>
         <div className={css.workspaceSwitch}>
           <span className={css.workspaceAvatar}>S</span>
-          <strong>{workspace.data?.name ?? t('我的店铺')}</strong>
+          {/* The seeded name follows the interface language; a store's own name stays as written. */}
+          <strong>
+            {!workspace.data?.name || workspace.data.name === '我的店铺'
+              ? t('我的店铺')
+              : workspace.data.name}
+          </strong>
         </div>
         <nav aria-label={t('主导航')}>
           {links.map(({ to, label, icon: Icon }) => (
